@@ -150,11 +150,19 @@ VarintDecoder inst_varint_decoder (
     .out(varint_out)
 );
 
+// While decoding BPE, varint_offset is stored trimmed (mod NUM_BYTES) even if
+// the run ends in the second buffer half and the buffer has not been shifted
+// yet. The next header is always less than NUM_BYTES ahead of offset, so a
+// varint_offset that isn't ahead of offset lies in the second half.
+offset_t current_varint_offset;
+assign current_varint_offset = (state == ST_DECODE_BPE && varint_offset <= offset)
+                               ? varint_offset + NUM_BYTES : varint_offset;
+
 data8_t[3:0] expected_varint_data;
-assign expected_varint_data = data[varint_offset +: 4];
+assign expected_varint_data = data[current_varint_offset +: 4];
 
 assert property (@(posedge clk) disable iff (!rst_n) !varint_in.valid || (expected_varint_data ==? varint_in.data))
-else $fatal(1, "Varint input data does not match the data at the current offset. In state %d, at varint_offset 0x%x, offset 0x%x, expected 0b%b (%x), got 0b%b (%x)", state, varint_offset, offset, expected_varint_data, expected_varint_data, varint_in.data, varint_in.data);
+else $fatal(1, "Varint input data does not match the data at the current offset. In state %d, at varint_offset 0x%x, offset 0x%x, expected 0b%b (%x), got 0b%b (%x)", state, current_varint_offset, offset, expected_varint_data, expected_varint_data, varint_in.data, varint_in.data);
 
 // Combinatorial shift values from the varint value used to compute rle_count
 // and bpe_count.
@@ -168,10 +176,6 @@ rle_count_t varint_no_encoding;
 assign varint_no_encoding = varint_out.data.value >> 1;
 bpe_count_t varint_no_encoding_bytes;
 assign varint_no_encoding_bytes = varint_no_encoding  << 3;
-
-// This value always points at the first byte after the varint
-offset_t offset_after_varint;
-assign offset_after_varint = varint_offset + varint_out.data.length;
 
 // ------- RLE decoding
 tagged_i #(data_t, $bits(rle_count_t)) rle_in(clk, reset_synced);
@@ -327,9 +331,13 @@ task reset();
     bpe_count <= 'x;
 endtask
 
-task goto_decode(input data32_t remaining_values);
+task goto_decode(input data32_t remaining_values, input offset_t varint_offst);
     logic less_remaining_values_than_next_bpe_count;
     bpe_count_t next_bpe_count, next_bpe_padded_count;
+    offset_t offset_after_varint;
+
+    // The first byte after the varint
+    offset_after_varint = varint_offst + varint_out.data.length;
 
     less_remaining_values_than_next_bpe_count = remaining_values < varint_no_encoding_bytes;
     next_bpe_count = less_remaining_values_than_next_bpe_count ? remaining_values : varint_no_encoding_bytes;
@@ -470,24 +478,18 @@ task finish_bpe();
         // If the varint for the next databeat is already valid and parsed, we can
         // move forward to the next decode, otherwise we store the varint offset
         // which we're trying to decode and move to a state waiting for more input).
-        goto_decode(next_remaining_values);
+        // current_varint_offset is relative to the not yet shifted buffer, so
+        // update_offset() performs the shift if the varint is in the second half.
+        goto_decode(next_remaining_values, current_varint_offset);
     end else begin
-        offset_t actual_varint_offset;
-
-        // varint_offset is stored trimmed (mod NUM_BYTES). If it isn't ahead of
-        // offset the run wrapped into the second buffer half, so add NUM_BYTES:
-        // update_offset() then performs the shift and lands on the trimmed
-        // varint_offset, and the varint data is read from the pre-shift
-        // second-half location. (Mirrors the rem==1 path in advance_bpe().)
-        actual_varint_offset = (varint_offset <= offset) ? varint_offset + NUM_BYTES
-                                                         : varint_offset;
-
         // NOTE: this update here is needed as this last BPE decoding might
         // have involved receiving more input, meaning that the varint may now
-        // be valid.
-        update_varint_data(data, actual_varint_offset);
-        varint_in.valid <= next_varint_valid(keep, last_received, actual_varint_offset);
-        update_offset(actual_varint_offset);
+        // be valid. update_offset() then performs the shift if the varint is in
+        // the second buffer half, and the varint data is read from the
+        // pre-shift location.
+        update_varint_data(data, current_varint_offset);
+        varint_in.valid <= next_varint_valid(keep, last_received, current_varint_offset);
+        update_offset(current_varint_offset);
 
         // If ~varint_out.valid we need to fetch more input to
         // satisfy it.
@@ -519,8 +521,17 @@ task finish_rle();
         // If the varint for the next databeat is already valid and parsed, we can
         // move forward to the next decode, otherwise we store the varint offset
         // which we're trying to decode and move to a state waiting for more input).
-        goto_decode(next_remaining_values);
+        goto_decode(next_remaining_values, varint_offset);
     end else begin
+        // The varint was computed in goto_decode_rle(), but decoding the RLE
+        // value might have involved receiving more input, so the varint may now
+        // be valid. Moving the offset to the varint also shifts the buffer if
+        // the varint is in the second half, so that ST_HEADER2 never stores
+        // input into the half that is still in use.
+        update_varint_data(data, varint_offset);
+        varint_in.valid <= next_varint_valid(keep, last_received, varint_offset);
+        update_offset(varint_offset);
+
         // If ~varint_out.valid we need to fetch more input to
         // satisfy it.
         state <= ST_HEADER2;
@@ -585,7 +596,7 @@ always_ff @(posedge clk) begin
             // but we weren't able to decode the header varint with just that.
             ST_HEADER2: begin
                 if (varint_out.valid) begin
-                    goto_decode(remaining_values);
+                    goto_decode(remaining_values, varint_offset);
                 end else if (in.valid) begin
                     update_varint_data(next_data, varint_offset);
                     varint_in.valid <= next_varint_valid(next_keep, next_last_received, varint_offset);

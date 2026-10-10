@@ -1,6 +1,9 @@
 from dataclasses import dataclass
-from coyote_test import fpga_test_case, fpga_stream, fpga_register
+from coyote_test import fpga_stream
 from os.path import dirname, realpath, join
+
+from libstf_utils.configured_test_case import ConfiguredTestCase
+from parcore_utils.fpga_configuration import RunDecoderConfig
 
 
 def read_data(filename: str) -> bytearray:
@@ -21,31 +24,29 @@ class _RunDecoderConfig:
     offset: int
     num_values: int
 
-    def _registers(self) -> dict[int, bytearray]:
-        return {
-            3: bytearray(self.bit_width.to_bytes(4, 'little')),  # bit_width_t
-            4: bytearray(self.offset.to_bytes(4, 'little')),     # offset_t
-            5: bytearray(self.num_values.to_bytes(4, 'little')), # num_values
-        }
 
-
-class RunDecoderTestCase(fpga_test_case.FPGATestCase):
+class RunDecoderTestCase(ConfiguredTestCase):
     alternative_vfpga_top_file = "vfpga_tops/run_decoder_test.sv"
     debug_mode = True
+
+    def configure(self):
+        self.config.get_config(RunDecoderConfig).enqueue_page(
+            self.page_config.bit_width, self.page_config.offset, self.page_config.num_values
+        )
+        self.set_stream_input(0, self.chunk)
+        self.set_expected_output(
+            0, fpga_stream.Stream(fpga_stream.StreamType.SIGNED_INT_32, self.output)
+        )
 
     def run_page(self, config: _RunDecoderConfig, chunk: bytearray, output: list[int]):
         """Drive the RunDecoder with a single configured page and assert its output.
 
-        Page configuration is written to the RunDecoderConfig registers, the
-        page bytes are streamed in, and the expected output is asserted.
+        Page configuration is written to the RunDecoderConfig, the page bytes
+        are streamed in, and the expected output is asserted.
         """
-        for reg, value in config._registers().items():
-            self.write_register(fpga_register.vFPGARegister(reg, value))
-
-        self.set_stream_input(0, chunk)
-        self.set_expected_output(
-            0, fpga_stream.Stream(fpga_stream.StreamType.SIGNED_INT_32, output)
-        )
+        self.page_config = config
+        self.chunk = chunk
+        self.output = output
 
         self.simulate_fpga()
         self.assert_simulation_output()
@@ -72,6 +73,43 @@ class RunDecoderTestCase(fpga_test_case.FPGATestCase):
             read_data('mixed_data_rg0_col0_chunk_decompressed.bin'),
             ([v for i in range(10, 20) for v in [i - 10] * i]
              + list(range(128 - 118, 256 - 118)) * 2) * 2,
+        )
+
+    def test_rle_bit_width_19_long_runs(self):
+        # RLE runs of 64 values at the maximum supported bit width of 19
+        # (ID_BITS): a 2-byte count varint plus 3 value bytes makes 5-byte
+        # runs, so 64 runs sweep all run-start alignments of the decoder's
+        # 64-byte double buffer.
+        values = [(i * 2654435761) % 2**19 for i in range(64)]
+        body = bytearray()
+        for value in values:
+            body += bytes([0x80, 0x01]) + value.to_bytes(3, 'little')  # varint(64 << 1)
+        chunk = bytearray((3).to_bytes(4, 'little')) + bytearray(3) + bytes([19]) + body
+        self.run_page(
+            _RunDecoderConfig(bit_width=19, offset=8, num_values=64 * len(values)),
+            chunk,
+            [v for value in values for v in [value] * 64],
+        )
+
+    def test_bpe_short_runs(self):
+        # Back-to-back BPE runs of a single group (8 values) at bit_width=1,
+        # i.e. shorter than one output databeat (NUM_ELEMENTS = 16). This is
+        # what the run_decoder benchmark generates for --run-lengths <= 8.
+        # 2 bytes per run (header varint + 1 packed byte), 64 runs, so the
+        # page wraps the decoder's 64-byte double buffer several times.
+        # Every run packs a different byte (37 is odd, so i -> 37 * i + 11 is
+        # a bijection mod 256), so dropped, duplicated or reordered runs change
+        # the output.
+        packed_runs = [(37 * i + 11) & 0xFF for i in range(64)]
+        values = [(packed >> j) & 1 for packed in packed_runs for j in range(8)]
+        body = bytearray()
+        for packed in packed_runs:
+            body += bytes([(1 << 1) | 1, packed])  # one bit-packed group of 8 values
+        chunk = bytearray((3).to_bytes(4, 'little')) + bytearray(3) + bytes([1]) + body
+        self.run_page(
+            _RunDecoderConfig(bit_width=1, offset=8, num_values=len(values)),
+            chunk,
+            values,
         )
 
     def test_back_to_back_bpe(self):
