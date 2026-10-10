@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from coyote_test import fpga_test_case, fpga_stream, fpga_register, simulation_time
+from coyote_test import fpga_stream, io_writer
 from os.path import dirname, realpath, join
 
 import pyarrow.parquet as pq
@@ -10,7 +10,8 @@ from page_header_parser_test import (
     _extract_parquet_column_chunks,
 )
 
-from libstf_utils.fpga_configuration import stream_type_to_libstf_type_t
+from libstf_utils.configured_test_case import ConfiguredTestCase
+from parcore_utils.fpga_configuration import ColumnChunkDecoderConfig, Compression
 
 
 @dataclass
@@ -20,16 +21,6 @@ class _ColumnChunk:
     chunk_bytes: bytearray   # full column-chunk: thrift headers + payloads concatenated
     stream_type: "fpga_stream.StreamType" = fpga_stream.StreamType.SIGNED_INT_64
     is_required: bool = False  # REQUIRED columns have no definition levels in their data pages
-
-    def _register(self) -> bytearray:
-        type_t = stream_type_to_libstf_type_t(self.stream_type)
-        # column_chunk_conf_t packs (MSB -> LSB) as:
-        #   is_required [1 bit] | compression_t [1 bit] | num_values [32 bits] | type_t [3 bits]
-        compression = 1 if self.compression else 0
-        is_required = 1 if self.is_required else 0
-        packed = ((is_required << 36) | (compression << 35) |
-                  ((self.num_values & 0xFFFFFFFF) << 3) | (type_t & 0x7))
-        return bytearray(packed.to_bytes(8, 'little'))
 
 
 def read_bytes(filename: str) -> bytearray:
@@ -175,37 +166,65 @@ _RLE_OUTPUT = [i for i in range(10, 20) for _ in range(i)]
 _PLAIN_OUTPUT = list(range(0, 256))
 
 
-class ColumnChunkDecoderTestCase(fpga_test_case.FPGATestCase):
+class ColumnChunkDecoderTestCase(ConfiguredTestCase):
     alternative_vfpga_top_file = "vfpga_tops/column_chunk_decoder_test.sv"
     debug_mode = True
 
-    def __init__(self, a) -> None:
-        super().__init__(a)
-
-    def setUp(self):
-        return super().setUp()
-
-    def run_chunks(self, inputs: list[_ColumnChunk], outputs: list[list[int]]):
-        """Drive the decoder with one or more column chunks and assert outputs."""
-        # Chunk-level registers only — page-level configuration is now produced
-        # inside ColumnChunkDecoder by PageHeaderParser. Offset 3 mirrors
-        # page_header_parser_test.py (GlobalConfig occupies regs 0..2).
-        for input in inputs:
-            self.write_register(fpga_register.vFPGARegister(3, input._register()))
+    def configure(self):
+        # Chunk-level configuration only — page-level configuration is produced
+        # inside ColumnChunkDecoder by PageHeaderParser.
+        config = self.config.get_config(ColumnChunkDecoderConfig)
+        for input in self.inputs:
+            compression = Compression.SNAPPY if input.compression else Compression.RAW
+            config.enqueue_column_chunk(
+                0, compression, input.num_values, input.stream_type, input.is_required
+            )
 
         # One stream input per column chunk (full thrift-wrapped bytes).
-        for input in inputs:
+        for input in self.inputs:
             self.set_stream_input(0, input.chunk_bytes)
 
         # The output value width follows each chunk's declared type_t.
-        for input, output in zip(inputs, outputs):
+        for input, output in zip(self.inputs, self.outputs):
             self.set_expected_output(0, fpga_stream.Stream(input.stream_type, output))
+
+    def finish_input(self, end_event):
+        # Reads the profile once all outputs were written, while the simulation is still running.
+        if self.read_profile_after_run:
+            self.get_io_writer().block_till_completed(
+                io_writer.CoyoteOperator.LOCAL_WRITE,
+                self._expected_completed_write_transfers,
+                end_event,
+            )
+            self.profile = self.config.get_config(ColumnChunkDecoderConfig).read_profile(0)
+
+        super().finish_input(end_event)
+
+    def run_chunks(self, inputs: list[_ColumnChunk], outputs: list[list[int]],
+                   read_profile: bool = False):
+        """Drive the decoder with one or more column chunks and assert outputs."""
+        self.inputs = inputs
+        self.outputs = outputs
+        self.read_profile_after_run = read_profile
 
         self.simulate_fpga()
         self.assert_simulation_output()
 
     def test_one_rle_page(self):
         self.run_chunks([_parquet_chunk('rle_data.parquet')], [_RLE_OUTPUT])
+
+    def test_profile(self):
+        self.run_chunks(
+            [_parquet_chunk('rle_data.parquet'), _parquet_chunk('bpe_data.parquet')],
+            [_RLE_OUTPUT, list(range(10, 20)) * 15],
+            read_profile=True,
+        )
+
+        # Every column chunk is one input and one output stream.
+        self.assertEqual(self.profile.input.last_handshakes, 2)
+        self.assertEqual(self.profile.output.last_handshakes, 2)
+        self.assertGreater(self.profile.input.handshakes_cycles, 0)
+        self.assertGreater(self.profile.output.handshakes_cycles, 0)
 
     def test_one_bpe_page(self):
         self.run_chunks([_parquet_chunk('bpe_data.parquet')], [list(range(10, 20)) * 15])
@@ -230,7 +249,6 @@ class ColumnChunkDecoderTestCase(fpga_test_case.FPGATestCase):
         )
 
     def test_many_hybrid_pages(self):
-        self.overwrite_simulation_time(simulation_time.SimulationTime.till_finished())
         mixed_output = ([i**8 for i in range(10, 20) for _ in range(i)] +
                         list(range(128, 256)) * 2) * 2
         self.run_chunks(
@@ -263,7 +281,6 @@ class ColumnChunkDecoderTestCase(fpga_test_case.FPGATestCase):
         #            dictionary state, chunk B would either materialise stale
         #            32-bit values or mis-size its 64-bit output, so a correct
         #            chunk B output proves the reset.
-        self.overwrite_simulation_time(simulation_time.SimulationTime.till_finished())
         chunk_a = make_tricky(
             'rle_data_rg0_col0', len(_RLE_OUTPUT), _PLAIN_OUTPUT, 1,
             stream_type=fpga_stream.StreamType.SIGNED_INT_32,
@@ -289,7 +306,6 @@ class ColumnChunkDecoderTestCase(fpga_test_case.FPGATestCase):
     def test_required_and_optional_chunks(self):
         # The flag is per chunk: alternate REQUIRED and OPTIONAL chunks back to back, covering both
         # the hybrid and the plain (StripLevels) path.
-        self.overwrite_simulation_time(simulation_time.SimulationTime.till_finished())
         self.run_chunks(
             [
                 make_tricky('rle_data_rg0_col0', len(_RLE_OUTPUT), _PLAIN_OUTPUT, 1,

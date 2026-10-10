@@ -1,5 +1,8 @@
-from coyote_test import fpga_test_case, fpga_stream, fpga_register
+from coyote_test import fpga_stream
 from os.path import dirname, realpath, join
+
+from libstf_utils.configured_test_case import ConfiguredTestCase
+from parcore_utils.fpga_configuration import HybridPageDecoderConfig
 
 
 def read_data(filename: str) -> bytearray:
@@ -68,33 +71,33 @@ _rle_input = read_data('rle_data_rg0_col0_chunk_decompressed.bin')
 assert custom_page_header(_rle_input, 13) == custom_page_header(custom_page_header(_rle_input, 75), 13)
 
 
-class HybridPageDecoderTestCase(fpga_test_case.FPGATestCase):
+class HybridPageDecoderTestCase(ConfiguredTestCase):
     alternative_vfpga_top_file = "vfpga_tops/hybrid_page_decoder_test.sv"
     debug_mode = True
     # verbose_logging = True
+
+    def configure(self):
+        config = self.config.get_config(HybridPageDecoderConfig)
+        for input in self.inputs:
+            self.set_stream_input(0, input)
+        for output, required in zip(self.outputs, self.is_required):
+            self.set_expected_output(
+                0, fpga_stream.Stream(fpga_stream.StreamType.SIGNED_INT_32, output)
+            )
+            config.enqueue_page(len(output), required)
 
     def run_pages(self, inputs: list[bytearray], outputs: list[list[int]],
                   is_required: list[bool] | None = None):
         """Drive the decoder with one or more pages and assert their outputs.
 
-        Each page is streamed in and its num_values plus is_required flag
-        (hybrid_page_conf_t: is_required at bit 32) is written to the per-page
-        config register (offset 3); the expected outputs are asserted. Pages are
-        of OPTIONAL columns (with definition levels) unless `is_required` says
-        otherwise.
+        Each page is streamed in and its num_values plus is_required flag is
+        written to the HybridPageDecoderConfig; the expected outputs are
+        asserted. Pages are of OPTIONAL columns (with definition levels) unless
+        `is_required` says otherwise.
         """
-        if is_required is None:
-            is_required = [False] * len(outputs)
-        for input in inputs:
-            self.set_stream_input(0, input)
-        for output, required in zip(outputs, is_required):
-            self.set_expected_output(
-                0, fpga_stream.Stream(fpga_stream.StreamType.SIGNED_INT_32, output)
-            )
-            conf = (int(required) << 32) | len(output)
-            self.write_register(
-                fpga_register.vFPGARegister(3, bytearray(conf.to_bytes(8, 'little')))
-            )
+        self.inputs = inputs
+        self.outputs = outputs
+        self.is_required = is_required if is_required is not None else [False] * len(outputs)
 
         self.simulate_fpga()
         self.assert_simulation_output()

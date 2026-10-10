@@ -1,1 +1,0 @@
-../../../libstf/unit-tests/utils/fpga_configuration.py

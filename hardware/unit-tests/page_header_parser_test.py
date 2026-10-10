@@ -1,7 +1,9 @@
 import os
 from dataclasses import dataclass
 from enum import IntEnum
-from coyote_test import fpga_test_case, fpga_register, simulation_time
+from coyote_test import fpga_stream
+from libstf_utils.configured_test_case import ConfiguredTestCase
+from parcore_utils.fpga_configuration import ColumnChunkDecoderConfig, Compression
 
 import pyarrow.parquet as pq
 
@@ -257,7 +259,7 @@ def _hw_page_type(thrift_page_type: int, encoding: int) -> _PageType:
 # ---------------------------------------------------------------------------
 
 def _make_synthetic_plain(num_values: int, payload_size: int, last: bool) -> tuple[bytearray, _ExpectedPage]:
-    payload = bytearray(range(payload_size % 256)) * (payload_size // 256 + 1)
+    payload = bytearray(range(256)) * (payload_size // 256 + 1)
     payload = payload[:payload_size]
     hdr = _make_data_page_header(num_values, payload_size, payload_size, 0)
     chunk = hdr + payload
@@ -425,7 +427,7 @@ def _data_page_all_optional_fields_case() -> _TestCase:
     payload_size = 80
     encoding     = 0  # PLAIN
 
-    payload = bytearray(range(payload_size % 256)) * (payload_size // 256 + 1)
+    payload = bytearray(range(256)) * (payload_size // 256 + 1)
     payload = payload[:payload_size]
 
     hdr = _make_data_page_header_full(
@@ -517,7 +519,7 @@ def _data_page_sparse_stats_case() -> _TestCase:
     payload_size = 80
     encoding     = 0  # PLAIN
 
-    payload = bytearray(range(payload_size % 256)) * (payload_size // 256 + 1)
+    payload = bytearray(range(256)) * (payload_size // 256 + 1)
     payload = payload[:payload_size]
 
     hdr = _make_data_page_header_sparse_stats(
@@ -790,20 +792,6 @@ def _page_conf_record(page: _ExpectedPage) -> bytearray:
     rec[5] = 1 if page.last else 0
     return rec
 
-def _chunk_conf_register(num_values: int) -> bytearray:
-    """ColumnChunkDecoderConfig packed register value (single reg at offset 3).
-
-    column_chunk_conf_t packs (MSB -> LSB) as:
-      is_required [1 bit] | compression_t [1 bit] | num_values [32 bits] | type_t [3 bits]
-    """
-    is_required = 0  # unused here
-    compression = 0  # RAW
-    type_t      = 2  # INT64 (unused here)
-    packed = ((is_required << 36) | (compression << 35) |
-              ((num_values & 0xFFFFFFFF) << 3) | (type_t & 0x7))
-    return bytearray(packed.to_bytes(8, 'little'))
-
-
 # ---------------------------------------------------------------------------
 # Test case instances
 # ---------------------------------------------------------------------------
@@ -830,17 +818,17 @@ _PARQUET_CASES = _extract_parquet_column_chunks(_PARQUET_PATH)
 # Test class
 # ---------------------------------------------------------------------------
 
-class PageHeaderParserTestCase(fpga_test_case.FPGATestCase):
+class PageHeaderParserTestCase(ConfiguredTestCase):
     alternative_vfpga_top_file = "vfpga_tops/page_header_parser_test.sv"
     debug_mode = True
 
-    def _run(self, tcs: list[_TestCase], sim_time_us: int | None = None) -> None:
-        if sim_time_us is not None:
-            self.overwrite_simulation_time(simulation_time.SimulationTime.fixed_time(
-                sim_time_us, simulation_time.SimulationTimeUnit.MICROSECONDS))
-
-        for tc in tcs:
-            self.write_register(fpga_register.vFPGARegister(3, _chunk_conf_register(tc.chunk_num_values)))
+    def configure(self):
+        config = self.config.get_config(ColumnChunkDecoderConfig)
+        for tc in self.tcs:
+            # Only num_values is used by the PageHeaderParser.
+            config.enqueue_column_chunk(
+                0, Compression.RAW, tc.chunk_num_values, fpga_stream.StreamType.SIGNED_INT_64
+            )
 
             self.set_stream_input(0, tc.chunk_bytes)
 
@@ -849,6 +837,9 @@ class PageHeaderParserTestCase(fpga_test_case.FPGATestCase):
             for page in tc.pages:
                 self.set_expected_output(0, page.payload)
                 self.set_expected_output(1, _page_conf_record(page))
+
+    def _run(self, tcs: list[_TestCase]) -> None:
+        self.tcs = tcs
 
         self.simulate_fpga()
         self.assert_simulation_output()
@@ -920,4 +911,4 @@ class PageHeaderParserTestCase(fpga_test_case.FPGATestCase):
 
     def test_i64_statistics_all_alignments(self):
         """parquet-cpp style i64 Statistics fields at every offset within a 64-byte AXI beat."""
-        self._run([_SYNTHETIC_CASES[9]], sim_time_us=40)
+        self._run([_SYNTHETIC_CASES[9]])

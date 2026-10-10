@@ -117,4 +117,11 @@ function automatic longint unsigned COLUMN_CHUNK_DECODER_READ_REGS(input int num
     return COLUMN_CHUNK_DECODER_INFO_REGS + COLUMN_CHUNK_DECODER_PROFILE_REGS * num_decoders;
 endfunction
 
+// Configurations of the HybridPageDecoder and RunDecoder when used on their own
+parameter longint unsigned HYBRID_PAGE_DECODER_CONFIG_ID = 64'hd6736a4eef933024;
+parameter longint unsigned HYBRID_PAGE_DECODER_CONFIG_REGS = 1;
+
+parameter longint unsigned RUN_DECODER_CONFIG_ID = 64'hd6736a190f91fa01;
+parameter longint unsigned RUN_DECODER_CONFIG_REGS = 3;
+
 endpackage

@@ -4,7 +4,6 @@
 `include "libstf_macros.svh"
 
 import parcore::*;
-import parcore_test::*;
 import libstf::*;
 
 /* -- Tie-off unused interfaces and signals ----------------------------- */

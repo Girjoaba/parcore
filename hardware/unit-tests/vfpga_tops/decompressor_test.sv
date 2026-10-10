@@ -1,12 +1,14 @@
 `timescale 1ns / 1ps
 
+`include "lynx_macros.svh"
+`include "libstf_macros.svh"
+
 import libstf::data8_t;
 
 import parcore::*;
 import libstf::*;
 
 /* -- Tie-off unused interfaces and signals ----------------------------- */
-always_comb axi_ctrl.tie_off_s();
 always_comb notify.tie_off_m();
 always_comb sq_rd.tie_off_m();
 always_comb sq_wr.tie_off_m();
@@ -55,21 +57,46 @@ NDataToAXI #(data8_t, 64) inst_ndata_to_axi (
 
 
 /* -- CONFIG ------------------------------------------------------------ */
-ready_valid_i #(compression_t) conf(clk, rst_n);
-compression_t test_conf[2:0];
-assign test_conf = '{
-    COMPRESSION_SNAPPY,
-    COMPRESSION_RAW,
-    COMPRESSION_SNAPPY
-};
+write_config_i write_configs[1](.*);
+read_config_i  read_configs [1](.*);
+GlobalConfig #(
+    .SYSTEM_ID(PARCORE_SYSTEM_ID),
+    .NUM_CONFIGS(1),
+    .ADDR_SPACE_SIZES({COLUMN_CHUNK_DECODER_READ_REGS(1)})
+) inst_config (
+    .clk(clk),
+    .rst_n(rst_n),
 
-ReadyValidCyclicDriver #(compression_t, 3) inst_conf_driver (
-    .clk(aclk),
-    .rst_n(aresetn),
+    .axi_ctrl(axi_ctrl),
 
-    .data(test_conf),
-    .out_data(conf)
+    .write_configs(write_configs),
+    .read_configs(read_configs)
 );
+
+// No decoder is instantiated in this test, so the profiling counters are tied off.
+decoder_profile_i profile[1]();
+assign profile[0].counters = '0;
+
+ready_valid_i #(column_chunk_conf_t) chunk_conf[1](.*);
+ColumnChunkDecoderConfig #(
+    .NUM_DECODERS(1)
+) inst_column_chunk_decoder_config (
+    .clk(clk),
+    .rst_n(rst_n),
+
+    .write_config(write_configs[0]),
+    .read_config(read_configs[0]),
+
+    .profile(profile),
+
+    .out(chunk_conf)
+);
+
+// The Decompressor only consumes the compression field of the chunk config.
+ready_valid_i #(compression_t) conf(clk, rst_n);
+assign conf.data           = chunk_conf[0].data.compression;
+assign conf.valid          = chunk_conf[0].valid;
+assign chunk_conf[0].ready = conf.ready;
 
 /* -- DESIGN WIRING ----------------------------------------------------- */
 

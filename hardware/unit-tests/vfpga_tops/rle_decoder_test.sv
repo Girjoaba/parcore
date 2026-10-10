@@ -17,53 +17,45 @@ for (genvar I = 1; I < N_STRM_AXI; I++) begin
     always_comb axis_host_send[I].tie_off_m();
 end
 
+/* -- Fix clock and reset names ----------------------------------------- */
+logic clk;
+logic rst_n;
+
+assign clk   = aclk;
+assign rst_n = aresetn;
+
 /* -- INPUT ------------------------------------------------------------- */
 
-always_comb axis_host_recv[0].tie_off_s();
-
-typedef struct packed {
-    data32_t data;
-    rle_count_t meta;
-} tagged_t;
-
-tagged_t test_data[3:0];
-assign test_data = '{
-    '{data: 98412, meta: 127},
-    '{data: 11, meta: 54},
-    '{data: 1337, meta: 7},
-    '{data: 1024, meta: 64}
-};
-
-ready_valid_i #(tagged_t) ready_valid_in(clk, rst_n);
-ReadyValidCyclicDriver #(tagged_t, 4) inst_in_driver (
-    .clk(aclk),
-    .rst_n(aresetn),
-
-    .data(test_data),
-    .out_data(ready_valid_in)
-);
+// Every host databeat carries one RLE run: the value in bits [31:0] and the
+// run length in the following $bits(rle_count_t) bits.
+AXI4S #(.AXI4S_DATA_BITS(512)) host_in (.aclk(clk), .aresetn(rst_n));
+assign axis_host_recv[0].tready = host_in.tready;
+assign host_in.tdata = axis_host_recv[0].tdata;
+assign host_in.tkeep = axis_host_recv[0].tkeep;
+assign host_in.tlast = axis_host_recv[0].tlast;
+assign host_in.tvalid = axis_host_recv[0].tvalid;
 
 tagged_i #(data32_t, $bits(rle_count_t)) in(clk, rst_n);
-assign ready_valid_in.ready = in.ready;
-assign in.valid = ready_valid_in.valid;
-assign in.data = ready_valid_in.data.data;
-assign in.tag = ready_valid_in.data.meta;
+assign host_in.tready = in.ready;
+assign in.valid = host_in.tvalid;
+assign in.data  = host_in.tdata[$bits(data32_t) - 1:0];
+assign in.tag   = host_in.tdata[$bits(data32_t) +: $bits(rle_count_t)];
+assign in.keep  = 1'b1;
+assign in.last  = 1'b1;
 
 /* -- OUTPUT ------------------------------------------------------------ */
 
-integer output_databeat;
-AXI4S #(.AXI4S_DATA_BITS(512)) host_out (.aclk(aclk), .aresetn(aresetn));
+AXI4S #(.AXI4S_DATA_BITS(512)) host_out (.aclk(clk), .aresetn(rst_n));
 assign host_out.tready = axis_host_send[0].tready;
 assign axis_host_send[0].tdata = host_out.tdata;
 assign axis_host_send[0].tkeep = host_out.tkeep;
 assign axis_host_send[0].tlast = host_out.tlast;
 assign axis_host_send[0].tvalid = host_out.tvalid;
-assign axis_host_send[0].tid = output_databeat;
 
 ndata_i #(data32_t, 16) out(clk, rst_n);
 NDataToAXI #(data32_t, 16) inst_ndata_to_axi (
-    .clk(aclk),
-    .rst_n(aresetn),
+    .clk(clk),
+    .rst_n(rst_n),
 
     .in(out),
     .out(host_out)
@@ -71,30 +63,9 @@ NDataToAXI #(data32_t, 16) inst_ndata_to_axi (
 
 /* -- DESIGN WIRING ----------------------------------------------------- */
 
-
-always_ff @(posedge aclk) begin
-    if(aresetn == 1'b0) begin 
-        output_databeat  <= 0;
-    end else begin
-        if (in.valid && in.ready) begin
-            $display("< in valid: %x, ready: %x", in.valid, in.ready);
-        end
-
-        if (host_out.tvalid && host_out.tready) begin
-            $display("> out valid: %x, ready: %x, last: %x, keep: %x", host_out.tvalid, host_out.tready, host_out.tlast, host_out.tkeep);
-            output_databeat <= output_databeat + 1;
-
-            if (host_out.tlast) begin
-              $display(">>! got tlast after %d databeats", output_databeat+1);
-              output_databeat <= 0;
-            end
-        end
-    end
-end
-
 ExpandRLE #(data32_t, 16) inst_expand_rle (
-    .clk(aclk),
-    .rst_n(aresetn),
+    .clk(clk),
+    .rst_n(rst_n),
 
     .in(in),
     .out(out)
