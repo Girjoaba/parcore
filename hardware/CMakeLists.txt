@@ -18,8 +18,24 @@ set(TLBL_BITS 30)
 
 validation_checks_hw()
 
+set(VFPGA_TOP "" CACHE STRING "vFPGA top to build instead of src/vfpga_top.svh, relative to hardware/ (e.g. unit-tests/vfpga_tops/run_decoder_test.sv)")
+
+set(VFPGA_SRC_DIRS "src ../libstf/hardware/src ../vhsnunzip/src")
+
+# Coyote takes the vFPGA top from the first source directory, so a custom top is copied into its own
+# directory in the build tree that is put in front of the other source directories.
+if(VFPGA_TOP)
+    get_filename_component(VFPGA_TOP_FILE ${VFPGA_TOP} ABSOLUTE BASE_DIR ${CMAKE_SOURCE_DIR})
+    if(NOT EXISTS ${VFPGA_TOP_FILE})
+        message(FATAL_ERROR "VFPGA_TOP ${VFPGA_TOP_FILE} does not exist.")
+    endif()
+    configure_file(${VFPGA_TOP_FILE} ${CMAKE_BINARY_DIR}/vfpga_top/vfpga_top.svh COPYONLY)
+    file(RELATIVE_PATH VFPGA_TOP_DIR ${CMAKE_SOURCE_DIR} ${CMAKE_BINARY_DIR}/vfpga_top)
+    set(VFPGA_SRC_DIRS "${VFPGA_TOP_DIR} ${VFPGA_SRC_DIRS}")
+endif()
+
 load_apps (
-    VFPGA_C0_0 "src ../libstf/hardware/src ../vhsnunzip/src"
+    VFPGA_C0_0 "${VFPGA_SRC_DIRS}"
 )
 
 create_hw()
