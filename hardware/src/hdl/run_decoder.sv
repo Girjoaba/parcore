@@ -36,6 +36,10 @@ localparam int MAX_IN_TRANSIT = 8;
 localparam int DATA_SIZE = ($bits(data_t) + 7) / 8;
 localparam int VARINT_OFFSET_COMPUTATION_WIDTH = 18;
 
+// Positions of the next header relative to the not yet shifted buffer can lie beyond its end, so
+// they need one more bit than offset_t.
+typedef logic [$bits(offset_t):0] header_offset_t;
+
 // ------- Input extraction ------
 data8_t[NUM_BYTES - 1:0] in_data;
 assign in_data = in.data;
@@ -371,7 +375,8 @@ task goto_decode_bpe(
 );
     bpe_remaining_inputs_t next_bpe_remaining_inputs; 
     logic [$clog2(NUM_ELEMENTS) - 1:0] values_in_extra_input;
-    offset_t next_varint_offset_increment_extra, next_varint_offset_increment, next_varint_offset;
+    offset_t next_varint_offset_increment_extra, next_varint_offset_increment;
+    header_offset_t next_varint_offset;
 
     next_bpe_remaining_inputs = bpe_padded_cnt / NUM_ELEMENTS;
     values_in_extra_input = bpe_padded_cnt % NUM_ELEMENTS;
@@ -386,8 +391,8 @@ task goto_decode_bpe(
     `endif
 
     `ifndef SYNTHESIS
-    if (next_varint_offset != offset_t'(offst + ((bpe_padded_cnt * bit_width) / 8))) begin
-        $fatal(1, "goto_decode_bpe() computed the wrong next_varint_offset, expected %d, got %d", offset_t'(offst + ((bpe_padded_cnt * bit_width) / 8)), next_varint_offset);
+    if (offset_t'(next_varint_offset) != offset_t'(offst + ((bpe_padded_cnt * bit_width) / 8))) begin
+        $fatal(1, "goto_decode_bpe() computed the wrong next_varint_offset, expected %d, got %d", offset_t'(offst + ((bpe_padded_cnt * bit_width) / 8)), offset_t'(next_varint_offset));
     end
     `endif
 
@@ -538,12 +543,19 @@ task finish_rle();
     end
 endtask
 
-task update_varint_data(input data8_t[NUM_BYTES * 2 - 1:0] new_data, offset_t new_offst);
-    varint_in.data <= new_data[new_offst +: 4];
+// The header may extend beyond the buffer, in which case it is not valid until the buffer has been
+// shifted and the next databeat has been received.
+task update_varint_data(input data8_t[NUM_BYTES * 2 - 1:0] new_data, header_offset_t new_offst);
+    data8_t[NUM_BYTES * 2 + VARINT_NUM_BYTES - 2:0] padded_data;
+    padded_data = new_data;
+    varint_in.data <= padded_data[new_offst +: VARINT_NUM_BYTES];
 endtask
 
-function next_varint_valid(input logic[NUM_BYTES * 2 - 1:0] keep, logic last_received, offset_t offst);
-    next_varint_valid = keep[offst] && (last_received || (&keep[(offst + 1) +: 3]));
+function next_varint_valid(input logic[NUM_BYTES * 2 - 1:0] keep, logic last_received, header_offset_t offst);
+    logic[NUM_BYTES * 2 + VARINT_NUM_BYTES - 2:0] padded_keep;
+    padded_keep = keep;
+    next_varint_valid = offst < NUM_BYTES * 2 && padded_keep[offst] &&
+                        (last_received || (&padded_keep[(offst + 1) +: VARINT_NUM_BYTES - 1]));
 endfunction
 
 always_ff @(posedge clk) begin

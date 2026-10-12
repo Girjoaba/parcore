@@ -123,3 +123,20 @@ class RunDecoderTestCase(ConfiguredTestCase):
             read_data('back_to_back_bpe_chunk_decompressed.bin'),
             vals1 + vals2,
         )
+
+    def test_bpe_bit_width_16_two_groups(self):
+        # Back-to-back BPE runs of two groups (16 values, one output databeat) at bit_width=16:
+        # 1 header byte plus 32 packed bytes per run, so the run starts shift by one byte per run
+        # relative to the decoder's 64-byte double buffer.
+        values = [(i * 2654435761) % 2**16 for i in range(16 * 64)]
+        body = bytearray()
+        for run in range(len(values) // 16):
+            body.append((2 << 1) | 1)
+            for value in values[run * 16:(run + 1) * 16]:
+                body += value.to_bytes(2, 'little')
+        chunk = bytearray((3).to_bytes(4, 'little')) + bytearray(3) + bytes([16]) + body
+        self.run_page(
+            _RunDecoderConfig(bit_width=16, offset=8, num_values=len(values)),
+            chunk,
+            values,
+        )
