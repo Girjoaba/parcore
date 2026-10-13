@@ -14,6 +14,8 @@ tmux session).
 Examples:
   decompressor         Build the bitstream for examples/01_decompressor.
   run-decoder          Build the bitstream for examples/02_run_decoder.
+  column-chunk-decoder Build the full ParCore design for
+                       examples/03_column_chunk_decoder.
 
 Options:
   -h, --help           Show this help message and exit.
@@ -21,6 +23,7 @@ Options:
 Usage examples:
   synthesize.sh decompressor
   synthesize.sh run-decoder
+  synthesize.sh column-chunk-decoder
 EOF
 }
 
@@ -30,6 +33,7 @@ while [ $# -gt 0 ]; do
         -h|--help) usage; exit 0 ;;
         decompressor) example=decompressor; top=decompressor_test ;;
         run-decoder|run_decoder) example=run-decoder; top=run_decoder_test ;;
+        column-chunk-decoder|column_chunk_decoder) example=column-chunk-decoder; top="" ;;
         *) echo "Unknown argument: $1" >&2; echo "" >&2; usage >&2; exit 1 ;;
     esac
     shift
@@ -55,9 +59,12 @@ build_dir="$PWD/build-$(printf '%02d' $((n + 1)))"
 echo "Building $example bitstream in hardware/$(basename "$build_dir")..."
 
 mkdir "$build_dir"
-# The examples reuse the vFPGA tops of the unit tests.
-cmake -S . -B "$build_dir" \
-    -DVFPGA_TOP="$repo_dir/hardware/unit-tests/vfpga_tops/$top.sv" || exit 1
+# Examples 01 and 02 reuse the vFPGA tops of the unit tests, 03 uses the full design.
+cmake_args=()
+if [ -n "$top" ]; then
+    cmake_args+=(-DVFPGA_TOP="$repo_dir/hardware/unit-tests/vfpga_tops/$top.sv")
+fi
+cmake -S . -B "$build_dir" "${cmake_args[@]}" || exit 1
 
 session="parcore-$(basename "$build_dir")"
 log="$build_dir/bitgen.log"

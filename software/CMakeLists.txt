@@ -5,8 +5,6 @@ project(parcore
   LANGUAGES CXX
 )
 
-option(PARCORE_WITHOUT_ARROW "Build ParCore without any Apache Arrow dependency. When ON (default), the Arrow-returning Readers (FileReader, PreloadFileReader, MultiReader, the adaptor, and the CPU/hybrid Parquet parser) are excluded and Arrow is not linked." ON)
-
 # Default to a Release build (optimized) unless the user specifies otherwise.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Choose the type of build." FORCE)
@@ -37,8 +35,6 @@ add_library(parcore SHARED)
 target_sources(parcore PRIVATE
     parcore/configuration.cpp
     parcore/column_chunk_decoder.cpp
-    parcore/hardware_reader.cpp
-    parcore/memory_reader.cpp
 
     parcore/metadata/metadata.cpp
 )
@@ -53,32 +49,6 @@ target_include_directories(parcore PRIVATE ${COYOTE_INCLUDE_DIRS})
 target_link_libraries(parcore PRIVATE libstf)
 target_include_directories(parcore PRIVATE ${LIBSTF_INCLUDE_DIRS})
 
-if (PARCORE_WITHOUT_ARROW)
-    message(STATUS "Building ParCore without Apache Arrow")
-else()
-    message(STATUS "Building ParCore with Apache Arrow and the Parquet reader stack")
-
-    find_package(Arrow REQUIRED)
-    target_link_libraries(parcore PUBLIC Arrow::arrow_shared)
-
-    find_package(Parquet REQUIRED)
-    target_link_libraries(parcore PRIVATE Parquet::parquet_shared)
-    target_include_directories(parcore PRIVATE ${PARQUET_INCLUDE_DIRS})
-
-    # Arrow-returning Readers and the CPU/hybrid parquet parser.
-    target_sources(parcore PRIVATE
-        parcore/file_reader.cpp
-        parcore/preload_file_reader.cpp
-        parcore/adaptor.cpp
-        parcore/multi_reader.cpp
-
-        parcore/cpu/cpu.cpp
-        parcore/cpu/cpu_reader.cpp
-        parcore/hybrid_reader.cpp
-        parcore/metadata/utils.cpp
-    )
-endif()
-
 # Install the library
 install(TARGETS parcore
     EXPORT parcoreTargets
@@ -88,31 +58,11 @@ install(TARGETS parcore
     INCLUDES DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}
 )
 
-# Install headers. The Arrow-coupled Reader/adaptor headers are only installed
-# when ParCore is built with Arrow; the Arrow-free build ships only the headers
-# that don't pull in Arrow.
-set(PARCORE_ARROW_HEADERS
-    PATTERN "reader.hpp" EXCLUDE
-    PATTERN "adaptor.hpp" EXCLUDE
-    PATTERN "file_reader.hpp" EXCLUDE
-    PATTERN "preload_file_reader.hpp" EXCLUDE
-    PATTERN "multi_reader.hpp" EXCLUDE
-    PATTERN "hybrid_reader.hpp" EXCLUDE
-    PATTERN "utils.hpp" EXCLUDE
-    PATTERN "cpu" EXCLUDE
+# Install headers
+install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/parcore/"
+    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/parcore
+    FILES_MATCHING PATTERN "*.hpp"
 )
-if (PARCORE_WITHOUT_ARROW)
-    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/parcore/"
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/parcore
-        FILES_MATCHING PATTERN "*.hpp"
-        ${PARCORE_ARROW_HEADERS}
-    )
-else()
-    install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/parcore/"
-        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/parcore
-        FILES_MATCHING PATTERN "*.hpp"
-    )
-endif()
 
 # Export package configuration
 install(EXPORT parcoreTargets
