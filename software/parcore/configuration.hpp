@@ -45,12 +45,14 @@ class ColumnChunkDecoderConfig : public libstf::Config {
      * @param decoder     The decoder to configure.
      * @param compression Whether this chunk is SNAPPY compressed or not.
      * @param num_values  The total number of values in this chunk.
-     * @param typ         The type of values in this chunk.
+     * @param typ         The physical type of values in this chunk.
      * @param is_required Whether the column is REQUIRED (max_definition_level == 0), i.e. its data
      *                    pages carry no definition levels.
+     * @param logical_typ The type the decoder casts the values to. Pass typ for no cast.
      */
     void enqueue_column_chunk(libstf::stream_t decoder, metadata::Compression compression,
-                              uint64_t num_values, libstf::type_t typ, bool is_required);
+                              uint64_t num_values, libstf::type_t typ, bool is_required,
+                              libstf::type_t logical_typ);
 
     const libstf::stream_t num_decoders() const;
     const size_t           maximum_num_enqueued_configs() const;

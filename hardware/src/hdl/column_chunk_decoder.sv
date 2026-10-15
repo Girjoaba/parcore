@@ -217,6 +217,7 @@ TypedNDataMultiplexer #(DATABEAT_SIZE, NUM_OUT) inst_demultiplexer (
 );
 
 ready_valid_i #(data32_t) num_values(clk, reset_synced);
+typed_ndata_i #(DATABEAT_SIZE) normalized(clk, reset_synced);
 TypedNormalizeUntil #(
     .size_t(data32_t), 
     .DATABEAT_SIZE(DATABEAT_SIZE),
@@ -228,6 +229,21 @@ TypedNormalizeUntil #(
     .size(num_values),
 
     .in(inner_out),
+    .out(normalized)
+);
+
+// Casts the physical type to the logical type. It is placed after TypedNormalizeUntil, which counts
+// values in the physical type and provides the dense input the cast requires.
+ready_valid_i #(type_t) logical_type(clk, reset_synced);
+TypedNDataCast #(
+    .DATABEAT_SIZE(DATABEAT_SIZE)
+) inst_cast (
+    .clk(clk),
+    .rst_n(reset_synced),
+
+    .out_type(logical_type),
+
+    .in(normalized),
     .out(out)
 );
 
@@ -255,6 +271,7 @@ always_ff @(posedge clk) begin
     if (reset_synced == 1'b0) begin
         decompressor_conf.valid <= 1'b0;
         num_values.valid        <= 1'b0;
+        logical_type.valid      <= 1'b0;
         hybrid_num_values.valid <= 1'b0;
 
         hybrid_conf.valid    <= 1'b0;
@@ -269,6 +286,10 @@ always_ff @(posedge clk) begin
         last_page   <= 'X;
         state       <= ST_IDLE;
     end else begin
+        if (logical_type.ready) begin
+            logical_type.valid <= 1'b0;
+        end
+
         case (state)
             ST_IDLE: begin
                 if (chunk_confs[0].valid && chunk_confs[0].ready) begin
@@ -276,6 +297,9 @@ always_ff @(posedge clk) begin
 
                     num_values.data  <= chunk_confs[0].data.num_values;
                     num_values.valid <= 1'b1;
+
+                    logical_type.data  <= chunk_confs[0].data.logical_typ;
+                    logical_type.valid <= 1'b1;
 
                     typ         <= chunk_confs[0].data.typ;
                     is_required <= chunk_confs[0].data.is_required;
@@ -404,7 +428,9 @@ always_ff @(posedge clk) begin
     end
 end
 
-assign chunk_confs[0].ready = state == ST_IDLE;
+// The cast takes the logical type once the previous chunk's last beat passed it. Holding back the
+// next chunk until then keeps the pending logical type from being overwritten.
+assign chunk_confs[0].ready = state == ST_IDLE && !logical_type.valid;
 assign page_conf.ready      = state == ST_CONFIGURED;
 
 // ------ Stream profiling ------------------------

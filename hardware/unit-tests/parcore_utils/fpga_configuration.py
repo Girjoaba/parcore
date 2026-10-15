@@ -3,6 +3,7 @@
 # sync with the C++ implementation and the hardware.
 from dataclasses import dataclass
 from enum import IntEnum
+from typing import Optional
 from coyote_test import fpga_stream
 from libstf_utils.fpga_configuration import Config, RegisterAccess, stream_type_to_libstf_type_t
 
@@ -42,10 +43,12 @@ class ColumnChunkDecoderConfig(Config):
     PROFILE_REGS = 10
 
     # column_chunk_conf_t packs (MSB -> LSB) as:
-    #   is_required [1 bit] | compression_t [1 bit] | num_values [32 bits] | type_t [3 bits]
-    NUM_VALUES_SHIFT  = 3
-    COMPRESSION_SHIFT = NUM_VALUES_SHIFT + 32
-    IS_REQUIRED_SHIFT = COMPRESSION_SHIFT + 1
+    #   logical type_t [3 bits] | is_required [1 bit] | compression_t [1 bit] |
+    #   num_values [32 bits] | type_t [3 bits]
+    NUM_VALUES_SHIFT   = 3
+    COMPRESSION_SHIFT  = NUM_VALUES_SHIFT + 32
+    IS_REQUIRED_SHIFT  = COMPRESSION_SHIFT + 1
+    LOGICAL_TYPE_SHIFT = IS_REQUIRED_SHIFT + 1
 
     def __init__(self, registers: RegisterAccess, addr_offset: int, num_regs: int):
         super().__init__(registers, addr_offset, num_regs)
@@ -58,10 +61,16 @@ class ColumnChunkDecoderConfig(Config):
         num_values: int,
         data_type: fpga_stream.StreamType,
         is_required: bool = False,
+        logical_type: Optional[fpga_stream.StreamType] = None,
     ) -> int:
         assert 0 <= num_values < pow(2, 32)
+        # The hardware always uses the logical type, so it is written even if it equals data_type
+        if logical_type is None:
+            logical_type = data_type
+        logical_type_t = stream_type_to_libstf_type_t(logical_type)
         return (
-            int(is_required) << ColumnChunkDecoderConfig.IS_REQUIRED_SHIFT
+            logical_type_t << ColumnChunkDecoderConfig.LOGICAL_TYPE_SHIFT
+            | int(is_required) << ColumnChunkDecoderConfig.IS_REQUIRED_SHIFT
             | compression << ColumnChunkDecoderConfig.COMPRESSION_SHIFT
             | num_values << ColumnChunkDecoderConfig.NUM_VALUES_SHIFT
             | stream_type_to_libstf_type_t(data_type)
@@ -74,11 +83,13 @@ class ColumnChunkDecoderConfig(Config):
         num_values: int,
         data_type: fpga_stream.StreamType,
         is_required: bool = False,
+        logical_type: Optional[fpga_stream.StreamType] = None,
     ):
         """
         Configures the given decoder to process a column chunk of num_values values of data_type.
         is_required is set for REQUIRED columns (max_definition_level == 0), whose data pages carry
-        no definition levels.
+        no definition levels. The decoder casts the values to logical_type, which defaults to
+        data_type (no cast).
         """
         assert decoder < self.num_decoders, (
             f"Attempted to configure ColumnChunkDecoder {decoder} out of {self.num_decoders}"
@@ -86,7 +97,7 @@ class ColumnChunkDecoderConfig(Config):
         self.write_register(
             decoder,
             ColumnChunkDecoderConfig.register_value(
-                compression, num_values, data_type, is_required
+                compression, num_values, data_type, is_required, logical_type
             ),
         )
 

@@ -60,10 +60,10 @@ ColumnChunkDecoder::decode_column_chunk(
   auto output_handle =
       output_buffer_manager_->acquire_output_handle(decoder_mask());
 
-  auto type = metadata::to_libstf_type(column_chunk.type);
   column_chunk_config_->enqueue_column_chunk(
-      decoder_, column_chunk.compression, column_chunk.num_values, type,
-      column_chunk.is_required);
+      decoder_, column_chunk.compression, column_chunk.num_values,
+      metadata::to_libstf_type(column_chunk.type), column_chunk.is_required,
+      column_chunk.logical_type());
 
   column_chunk_enqueued_configs_ += 1;
 

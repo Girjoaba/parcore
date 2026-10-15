@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 from coyote_test import fpga_stream, io_writer
 from os.path import dirname, realpath, join
 
@@ -21,6 +22,11 @@ class _ColumnChunk:
     chunk_bytes: bytearray   # full column-chunk: thrift headers + payloads concatenated
     stream_type: "fpga_stream.StreamType" = fpga_stream.StreamType.SIGNED_INT_64
     is_required: bool = False  # REQUIRED columns have no definition levels in their data pages
+    # Type the decoder casts the values to, None for stream_type (no cast)
+    logical_type: Optional["fpga_stream.StreamType"] = None
+
+    def output_type(self) -> "fpga_stream.StreamType":
+        return self.logical_type if self.logical_type is not None else self.stream_type
 
 
 def read_bytes(filename: str) -> bytearray:
@@ -162,7 +168,11 @@ def make_tricky(
 
 
 # Reference outputs shared across cases.
-_RLE_OUTPUT = [i for i in range(10, 20) for _ in range(i)]
+def _rle_output(dict_values: list[int]) -> list[int]:
+    # The rle_data fixture repeats dictionary index i - 10 for i in range(10, 20) i times
+    return [dict_values[i - 10] for i in range(10, 20) for _ in range(i)]
+
+_RLE_OUTPUT = _rle_output(list(range(10, 20)))
 _PLAIN_OUTPUT = list(range(0, 256))
 
 
@@ -177,16 +187,17 @@ class ColumnChunkDecoderTestCase(ConfiguredTestCase):
         for input in self.inputs:
             compression = Compression.SNAPPY if input.compression else Compression.RAW
             config.enqueue_column_chunk(
-                0, compression, input.num_values, input.stream_type, input.is_required
+                0, compression, input.num_values, input.stream_type, input.is_required,
+                input.logical_type
             )
 
         # One stream input per column chunk (full thrift-wrapped bytes).
         for input in self.inputs:
             self.set_stream_input(0, input.chunk_bytes)
 
-        # The output value width follows each chunk's declared type_t.
+        # The output value width follows each chunk's logical type.
         for input, output in zip(self.inputs, self.outputs):
-            self.set_expected_output(0, fpga_stream.Stream(input.stream_type, output))
+            self.set_expected_output(0, fpga_stream.Stream(input.output_type(), output))
 
     def finish_input(self, end_event):
         # Reads the profile once all outputs were written, while the simulation is still running.
@@ -319,5 +330,33 @@ class ColumnChunkDecoderTestCase(ConfiguredTestCase):
                 _RLE_OUTPUT + _PLAIN_OUTPUT,
                 _PLAIN_OUTPUT,
                 _RLE_OUTPUT,
+            ],
+        )
+
+    def test_logical_types(self):
+        # Back-to-back chunks cast to narrower logical types, covering dictionary, hybrid and plain
+        # pages of OPTIONAL and REQUIRED columns, followed by a 64-bit chunk without a cast. The
+        # INT16 values are negative and use both bytes to catch byte selection and sign errors.
+        int16_dict  = [-1000 + 237 * i for i in range(10)]
+        int16_plain = list(range(-1000, 1000, 7))
+
+        int16_chunk = make_tricky(
+            'rle_data_rg0_col0', len(_RLE_OUTPUT), int16_plain, 1,
+            stream_type=fpga_stream.StreamType.SIGNED_INT_32, dict_values=int16_dict,
+        )
+        int16_chunk.logical_type = fpga_stream.StreamType.SIGNED_INT_16
+
+        uint8_chunk = make_tricky(
+            'rle_data_rg0_col0', len(_RLE_OUTPUT), _PLAIN_OUTPUT, 2,
+            stream_type=fpga_stream.StreamType.SIGNED_INT_32, is_required=True,
+        )
+        uint8_chunk.logical_type = fpga_stream.StreamType.UNSIGNED_INT_8
+
+        self.run_chunks(
+            [int16_chunk, uint8_chunk, make_plain_data(_PLAIN_OUTPUT)],
+            [
+                _rle_output(int16_dict) + int16_plain,
+                _RLE_OUTPUT * 2 + _PLAIN_OUTPUT,
+                _PLAIN_OUTPUT,
             ],
         )

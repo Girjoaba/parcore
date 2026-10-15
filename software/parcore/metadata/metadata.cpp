@@ -88,6 +88,16 @@ std::string read_string(std::istream &is) {
   return str;
 }
 
+libstf::type_t ColumnChunk::logical_type() const {
+  if (type == Type::INT32_T) {
+    if (logical_width == 8)
+      return libstf::type_t::BYTE_T;
+    if (logical_width == 16)
+      return libstf::type_t::INT16_T;
+  }
+  return to_libstf_type(type);
+}
+
 ColumnChunk ColumnChunk::from(std::istream &is) {
   ColumnChunk c;
 
@@ -104,7 +114,7 @@ bool ColumnChunk::operator==(const ColumnChunk &rhs) const {
   return type == rhs.type && num_values == rhs.num_values &&
          compression == rhs.compression && offset == rhs.offset &&
          total_compressed_size == rhs.total_compressed_size &&
-         is_required == rhs.is_required;
+         is_required == rhs.is_required && logical_width == rhs.logical_width;
 }
 
 RowGroup RowGroup::from(std::istream &is) {

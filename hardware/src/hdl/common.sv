@@ -79,10 +79,8 @@ typedef enum logic [1:0] {
     PAGE_TYPE_PLAIN = 2
 } page_type_t;
 
-// is_required is set for REQUIRED columns, i.e. max_definition_level == 0. Their data pages carry no
-// length-prefixed definition levels and the values start right at the first payload byte. Note that a
-// REQUIRED leaf below an OPTIONAL group still has definition levels and is thus not is_required.
 typedef struct packed {
+    type_t        logical_typ;
     logic         is_required;
     compression_t compression;
     data32_t      num_values;

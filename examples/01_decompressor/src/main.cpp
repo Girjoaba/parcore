@@ -303,9 +303,10 @@ int main(int argc, char *argv[]) {
     std::mt19937 rng(args.seed);
 
     // The decompressor test design only consumes the compression field of the column chunk
-    // config; num_values, type and is_required are irrelevant.
+    // config; num_values, the types and is_required are irrelevant.
     auto enqueue = [&](parcore::metadata::Compression compression) {
-        config->enqueue_column_chunk(0, compression, args.size / 4, type_t::INT32_T, false);
+        config->enqueue_column_chunk(0, compression, args.size / 4, type_t::INT32_T, false,
+                                     type_t::INT32_T);
     };
 
     std::cout << "compression,copy_fraction,actual_copy_fraction,in_bytes,"

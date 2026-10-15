@@ -26,13 +26,23 @@ inline uint64_t compression_to_hardware(metadata::Compression compression) {
     }
 }
 
+// Casts the TypedNDataCast in the ColumnChunkDecoder supports
+inline bool is_supported_cast(libstf::type_t typ, libstf::type_t logical_typ) {
+    return logical_typ == typ ||
+           (typ == libstf::type_t::INT32_T &&
+            (logical_typ == libstf::type_t::INT16_T || logical_typ == libstf::type_t::BYTE_T));
+}
+
 // column_chunk_conf_t packs (MSB -> LSB) as:
-//   is_required [1 bit] | compression_t [1 bit] | num_values [32 bits] | type_t [3 bits]
+//   logical type_t [3 bits] | is_required [1 bit] | compression_t [1 bit] | num_values [32 bits] |
+//   type_t [3 bits]
 constexpr const uint32_t COLUMN_CHUNK_DECODER_NUM_VALUES_SHIFT = 3;
 constexpr const uint32_t COLUMN_CHUNK_DECODER_COMPRESSION_SHIFT =
     COLUMN_CHUNK_DECODER_NUM_VALUES_SHIFT + 32;
 constexpr const uint32_t COLUMN_CHUNK_DECODER_IS_REQUIRED_SHIFT =
     COLUMN_CHUNK_DECODER_COMPRESSION_SHIFT + 1;
+constexpr const uint32_t COLUMN_CHUNK_DECODER_LOGICAL_TYPE_SHIFT =
+    COLUMN_CHUNK_DECODER_IS_REQUIRED_SHIFT + 1;
 
 const std::string column_config_prefix = "parcore::ColumnChunkDecoderConfig::";
 
@@ -44,15 +54,21 @@ ColumnChunkDecoderConfig::ColumnChunkDecoderConfig(std::shared_ptr<coyote::cThre
 void ColumnChunkDecoderConfig::enqueue_column_chunk(libstf::stream_t      decoder,
                                                     metadata::Compression compression,
                                                     uint64_t num_values, libstf::type_t typ,
-                                                    bool is_required) {
+                                                    bool is_required, libstf::type_t logical_typ) {
     if (decoder >= num_decoders_) {
         throw std::runtime_error("attempted to configure ColumnChunkDecoder " +
                                  std::to_string(decoder) + " (zero-based numbering), out of " +
                                  std::to_string(num_decoders_) + " decoders");
     }
+    if (!is_supported_cast(typ, logical_typ)) {
+        std::ostringstream msg;
+        msg << "ColumnChunkDecoder cannot cast " << typ << " to " << logical_typ;
+        throw std::runtime_error(msg.str());
+    }
 
     Profiler::open_regions({column_config_prefix + "enqueue_column_chunk"});
     uint64_t packed =
+        ((static_cast<uint64_t>(logical_typ) & 0x7) << COLUMN_CHUNK_DECODER_LOGICAL_TYPE_SHIFT) |
         (static_cast<uint64_t>(is_required) << COLUMN_CHUNK_DECODER_IS_REQUIRED_SHIFT) |
         (compression_to_hardware(compression) << COLUMN_CHUNK_DECODER_COMPRESSION_SHIFT) |
         ((num_values & 0xFFFFFFFF) << COLUMN_CHUNK_DECODER_NUM_VALUES_SHIFT) |

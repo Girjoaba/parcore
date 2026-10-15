@@ -38,6 +38,11 @@ struct ColumnChunk {
   // Columns with repetition levels (max_repetition_level > 0) are not supported at all.
   // Not part of the binary format read by from(), which keeps the default.
   bool is_required = false;
+  // Bit width of the column's integer logical type annotation (INT(bit_width, is_signed) or the
+  // converted types INT_8 ... UINT_64), 0 if the column has none.
+  uint8_t logical_width = 0;
+
+  libstf::type_t logical_type() const;
 
   static ColumnChunk from(std::istream &is);
   bool operator==(const ColumnChunk &rhs) const;
