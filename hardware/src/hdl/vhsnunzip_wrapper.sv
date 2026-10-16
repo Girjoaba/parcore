@@ -4,8 +4,7 @@ import lynxTypes::*;
 import libstf::*;
 
 module VHSNUnzipWrapper #(
-    parameter NUM_BYTES = AXI_DATA_BITS / 8,
-    parameter DUAL_ISSUE = 1
+    parameter NUM_BYTES = AXI_DATA_BITS / 8
 ) (
     input logic clk,
     input logic rst_n,
@@ -20,7 +19,7 @@ reg [1:0] decompressor_reset_counter;
 
 ndata_i #(data8_t, NUM_BYTES) out_inner(clk, rst_n);
 
-VHSNUnzipWrapperInternal #(NUM_BYTES, DUAL_ISSUE) inst_vhsnunzip_wrapper_internal (
+VHSNUnzipWrapperInternal #(NUM_BYTES) inst_vhsnunzip_wrapper_internal (
     .clk(clk),
     .rst_n(rst_n && decompressor_reset_counter == 3'd0),
 
@@ -57,8 +56,7 @@ end
 endmodule
 
 module VHSNUnzipWrapperInternal #(
-    parameter NUM_BYTES = AXI_DATA_BITS / 8,
-    parameter DUAL_ISSUE = 1
+    parameter NUM_BYTES = AXI_DATA_BITS / 8
 ) (
     input logic clk,
     input logic rst_n,
@@ -66,10 +64,9 @@ module VHSNUnzipWrapperInternal #(
     ndata_i.s in, // #(data8_t, NUM_BYTES)
     ndata_i.m out // #(data8_t, NUM_BYTES)
 );
-    // Decompressor parameters. DECOMP_DATA_BYTES must match C_BYTES in
-    // vhsnunzip's vhsnunzip_utils_pkg.vhd (the datapath lane width); the cnt
-    // widths are derived from it exactly as C_IDX / C_CNT are in the VHDL.
-    localparam DECOMP_DATA_BYTES = 16;
+    // Decompressor parameters. DECOMP_DATA_BYTES must match QB in
+    // vhsnunzip's vhsnunzip_quad_pkg.vhd (the line width).
+    localparam DECOMP_DATA_BYTES = 32;
     localparam DECOMP_DATA_BITS = DECOMP_DATA_BYTES * 8;
     localparam DECOMP_IN_CNT_BITS = $clog2(DECOMP_DATA_BYTES);
     localparam DECOMP_OUT_CNT_BITS = $clog2(DECOMP_DATA_BYTES) + 1;
@@ -258,11 +255,7 @@ module VHSNUnzipWrapperInternal #(
         end
     end
 
-    vhsnunzip_unbuffered #(
-        .LONG_CHUNKS(1),
-        .DUAL_ISSUE(DUAL_ISSUE),
-        .RAM_STYLE("ultra")
-    ) decompressor (
+    vhsnunzip_quad decompressor (
         .clk(clk),
         .reset(~rst_n),
 
