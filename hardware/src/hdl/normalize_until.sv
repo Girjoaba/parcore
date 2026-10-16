@@ -167,7 +167,9 @@ assign next_remaining = remaining - in_num_values;
 always_ff @(posedge clk) begin
     if (rst_n == 1'b0) begin
         remaining <= '0;
+        in_typ.data  <= 'X;
         in_typ.valid <= 1'b0;
+        fifo_typ.data  <= 'X;
         fifo_typ.valid <= 1'b0;
     end else begin
         if (unconfigured) begin

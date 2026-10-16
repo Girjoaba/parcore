@@ -295,7 +295,10 @@ assign consuming_in = in.ready && in.valid;
 
 always_ff @(posedge clk) begin
     if (!rst_n) begin
-        tmp.valid  <= 1'b0;
+        tmp.valid <= 1'b0;
+        tmp.data <= 'X;
+        tmp.keep <= 'X;
+        tmp.last <= 'X;
     end else begin
         if (consuming_in && ~is_ghost) begin
             tmp.valid <= in.valid;

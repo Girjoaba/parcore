@@ -269,20 +269,41 @@ logic dict_seen;
 
 always_ff @(posedge clk) begin
     if (reset_synced == 1'b0) begin
+        decompressor_conf.data  <= 'X;
         decompressor_conf.valid <= 1'b0;
-        num_values.valid        <= 1'b0;
-        logical_type.valid      <= 1'b0;
+
+        num_values.data  <= 'X;
+        num_values.valid <= 1'b0;
+
+        logical_type.data  <= 'X;
+        logical_type.valid <= 1'b0;
+
+        in_select.data  <= 'X;
+        in_select.valid <= 1'b0;
+
+        hybrid_conf.data  <= 'X;
+        hybrid_conf.keep  <= 'X;
+        hybrid_conf.last  <= 'X;
+        hybrid_conf.valid <= 1'b0;
+
+        hybrid_num_values.data  <= 'X;
         hybrid_num_values.valid <= 1'b0;
 
-        hybrid_conf.valid    <= 1'b0;
-        dict_type.valid      <= 1'b0;
-        plain_type.valid     <= 1'b0;
+        out_select.data  <= 'X;
+        out_select.valid <= 1'b0;
+
+        dict_type.data  <= 'X;
+        dict_type.valid <= 1'b0;
+
+        plain_type.data  <= 'X;
+        plain_type.valid <= 1'b0;
+
+        plain_required.data  <= 'X;
         plain_required.valid <= 1'b0;
-        in_select.valid      <= 1'b0;
-        out_select.valid     <= 1'b0;
 
         typ         <= BYTE_T;
         is_required <= 'X;
+        dict_seen   <= 'X;
         last_page   <= 'X;
         state       <= ST_IDLE;
     end else begin

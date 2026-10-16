@@ -136,6 +136,11 @@ endtask
 always_ff @(posedge clk) begin
     if (reset_synced == 1'b0) begin
         reset();
+
+        page_last <= 'X;
+
+        num_values  <= 'X;
+        is_required <= 'X;
     end else begin
         // Remember once the page's `last` input beat has been consumed.
         if (in.valid && in.ready && in.last) begin

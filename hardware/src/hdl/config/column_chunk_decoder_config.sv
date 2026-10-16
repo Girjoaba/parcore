@@ -58,8 +58,8 @@ for (genvar I = 0; I < NUM_DECODERS; I++) begin : gen_profile_regs
         .WIDTH($bits(decoder_profile_t)),
         .LEVELS(2)
     ) inst_counters_sr (
-        .i_clk(clk),
-        .i_rst_n(reset_synced),
+        .clk(clk),
+        .rst_n(reset_synced),
 
         .i_data(profile[I].counters),
         .o_data(registered_counters[I])
