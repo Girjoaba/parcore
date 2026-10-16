@@ -46,14 +46,39 @@ AXIToNData #(data8_t, 64) inst_axi_to_ndata (
 AXI4S axi_host_send_0 (.aclk(clk), .aresetn(rst_n));
 `AXIS_ASSIGN(axi_host_send_0, axis_host_send[0])
 
-ndata_i #(data8_t, 64) out(clk, rst_n);
+ndata_i #(data8_t, 64) out(clk, rst_n), out_throttled(clk, rst_n);
 NDataToAXI #(data8_t, 64) inst_ndata_to_axi (
     .clk(clk),
     .rst_n(rst_n),
 
-    .in(out),
+    .in(out_throttled),
     .out(axi_host_send_0)
 );
+
+// With DECOMPRESSOR_OUT_BACKPRESSURE defined, the output is only accepted in about a quarter of the
+// cycles (pseudo-random), which stalls the decompressor like a slower downstream consumer would.
+`ifdef DECOMPRESSOR_OUT_BACKPRESSURE
+logic[15:0] lfsr;
+always_ff @(posedge clk) begin
+    if (rst_n == 1'b0) begin
+        lfsr <= 16'hACE1;
+    end else begin
+        lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
+    end
+end
+
+logic out_enable;
+assign out_enable = lfsr[1:0] == 2'b0;
+`else
+logic out_enable;
+assign out_enable = 1'b1;
+`endif
+
+assign out_throttled.data  = out.data;
+assign out_throttled.keep  = out.keep;
+assign out_throttled.last  = out.last;
+assign out_throttled.valid = out.valid && out_enable;
+assign out.ready           = out_throttled.ready && out_enable;
 
 
 /* -- CONFIG ------------------------------------------------------------ */
