@@ -32,14 +32,39 @@ assign rst_n = aresetn;
 AXI4S axi_host_recv_0 (.aclk(clk), .aresetn(rst_n));
 `AXIS_ASSIGN(axis_host_recv[0], axi_host_recv_0)
 
-ndata_i #(data8_t, 64) in(clk, rst_n);
+ndata_i #(data8_t, 64) in_unthrottled(clk, rst_n), in(clk, rst_n);
 AXIToNData #(data8_t, 64) inst_axi_to_ndata (
     .clk(clk),
     .rst_n(rst_n),
 
     .in(axi_host_recv_0),
-    .out(in)
+    .out(in_unthrottled)
 );
+
+// With DECOMPRESSOR_IN_STARVATION defined, an input beat is only accepted in about one of 32 cycles
+// (pseudo-random), so the decompressor runs out of input like with a shared, slow input stream.
+`ifdef DECOMPRESSOR_IN_STARVATION
+logic[15:0] in_lfsr;
+always_ff @(posedge clk) begin
+    if (rst_n == 1'b0) begin
+        in_lfsr <= 16'h1D0F;
+    end else begin
+        in_lfsr <= {in_lfsr[14:0], in_lfsr[15] ^ in_lfsr[13] ^ in_lfsr[12] ^ in_lfsr[10]};
+    end
+end
+
+logic in_enable;
+assign in_enable = in_lfsr[4:0] == 5'b0;
+`else
+logic in_enable;
+assign in_enable = 1'b1;
+`endif
+
+assign in.data              = in_unthrottled.data;
+assign in.keep              = in_unthrottled.keep;
+assign in.last              = in_unthrottled.last;
+assign in.valid             = in_unthrottled.valid && in_enable;
+assign in_unthrottled.ready = in.ready && in_enable;
 
 /* -- OUTPUT ------------------------------------------------------------ */
 

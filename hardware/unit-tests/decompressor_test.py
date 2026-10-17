@@ -53,6 +53,62 @@ def make_overlapping_copies(seed: int, num_elements: int) -> tuple[bytearray, by
 
     return preamble + compressed, decompressed
 
+def make_straddling_literals(seed: int, size: int) -> tuple[bytearray, bytearray]:
+    """
+    Returns a raw Snappy stream and its decompressed bytes. The stream repeats a long literal whose
+    3-byte header starts at byte 30 of a 64-byte input beat, so it straddles two 32-byte lines, and
+    whose data starts at a 32-byte aligned output position. A long literal directly precedes it, as
+    in incompressible pages (e.g., random INT64 values), which Snappy writes as 64 KiB literals.
+    Short literals and copies in between restore the alignment.
+    """
+    rng = Random(seed)
+    compressed, decompressed = bytearray(), bytearray()
+
+    preamble, n = bytearray(), size
+    while n >= 0x80:
+        preamble.append((n & 0x7f) | 0x80)
+        n >>= 7
+    preamble.append(n)
+
+    def position() -> int:
+        return len(preamble) + len(compressed)
+
+    def literal(data: bytes):
+        if len(data) <= 60:
+            compressed.append((len(data) - 1) << 2)
+        else:
+            compressed.append(61 << 2)
+            compressed.extend((len(data) - 1).to_bytes(2, 'little'))
+        compressed.extend(data)
+        decompressed.extend(data)
+
+    def copy(offset: int, length: int):
+        compressed.append(((length - 1) << 2) | 2)
+        compressed.extend(offset.to_bytes(2, 'little'))
+        for _ in range(length):
+            decompressed.append(decompressed[-offset])
+
+    literal(rng.randbytes(64))
+    while True:
+        # A copy and a short literal of m bytes put the next header at byte 27 of a beat and the
+        # output at a 32-byte boundary
+        while not 1 <= (27 - position() - 4) % 64 <= 60:
+            literal(rng.randbytes(1))
+        m = (27 - position() - 4) % 64
+        copy(rng.randint(64, min(len(decompressed), 2000)), (-(len(decompressed) + m)) % 32 or 32)
+        literal(rng.randbytes(m))
+
+        # Then a literal of a multiple of 64 bytes, which puts the next header at byte 30
+        first, second = rng.randint(2, 16) * 64, rng.randint(2, 16) * 32
+        if len(decompressed) + first + second > size:
+            break
+        literal(rng.randbytes(first))
+        literal(rng.randbytes(second))
+
+    literal(rng.randbytes(size - len(decompressed)))
+
+    return preamble + compressed, decompressed
+
 class DecompressorTestCase(ConfiguredTestCase):
     alternative_vfpga_top_file = "vfpga_tops/decompressor_test.sv"
     debug_mode = True
@@ -91,6 +147,18 @@ class DecompressorTestCase(ConfiguredTestCase):
         # twice the offset (seen as wrong l_linenumber values in TPC-H lineitem).
         self.set_system_verilog_defines({"DECOMPRESSOR_OUT_BACKPRESSURE": "1"})
         compressed_data, decompressed_data = make_overlapping_copies(0, 1000)
+
+        self.run_pages([(Compression.SNAPPY, compressed_data, decompressed_data)])
+
+    def test_straddling_literal_headers_with_input_gaps(self):
+        # Regression test: the quad Snappy core checked that the literals of the elements in its
+        # group window were in the literal buffer, but used that check one cycle later, when an
+        # element that just arrived could already be in the window. If the input then stalled, the
+        # first line of a literal whose header straddles two lines read the third line before it
+        # was written, which corrupted its last byte (seen as one wrong byte at offset 0x9001F of
+        # PLAIN INT64 pages in ClickBench hits with multiple threads).
+        self.set_system_verilog_defines({"DECOMPRESSOR_IN_STARVATION": "1"})
+        compressed_data, decompressed_data = make_straddling_literals(0, 1 << 16)
 
         self.run_pages([(Compression.SNAPPY, compressed_data, decompressed_data)])
 
