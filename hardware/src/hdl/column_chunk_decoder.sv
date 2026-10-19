@@ -7,6 +7,9 @@ import libstf::data8_t;
 import libstf::data32_t;
 import libstf::type_t;
 import libstf::BYTE_T;
+import libstf::INT16_T;
+import libstf::INT32_T;
+import libstf::INT64_T;
 import parcore::*;
 
 module ColumnChunkDecoder #(
@@ -117,8 +120,8 @@ HybridPageDecoder #(
     .out(dict_ids)
 );
 
-ready_valid_i #(type_t) dict_type(clk, reset_synced);
-typed_ndata_i #(DATABEAT_SIZE) dict_values(clk, reset_synced);
+ready_valid_i #(type_t) dict_type(clk, reset_synced), dict_cast_type(clk, reset_synced);
+typed_ndata_i #(DATABEAT_SIZE) dict_physical(clk, reset_synced), dict_values(clk, reset_synced);
 NDataToTypedNData #(DATABEAT_SIZE) inst_dict_typed_conversion (
     .clk(clk),
     .rst_n(reset_synced),
@@ -126,6 +129,21 @@ NDataToTypedNData #(DATABEAT_SIZE) inst_dict_typed_conversion (
     .in_type(dict_type),
     .in(ins[IN_DICT]),
 
+    .out(dict_physical)
+);
+
+// Narrows 64 bit values to INT32_T before they are stored, so the dictionary can look up twice as
+// many per beat. Narrower logical types are cast further at the output, because the TypedDictionary
+// only holds 32 and 64 bit values.
+TypedNDataCast #(
+    .DATABEAT_SIZE(DATABEAT_SIZE)
+) inst_dict_cast (
+    .clk(clk),
+    .rst_n(reset_synced),
+
+    .out_type(dict_cast_type),
+
+    .in(dict_physical),
     .out(dict_values)
 );
 
@@ -161,7 +179,7 @@ TypedRewriteLast #(
 );
 
 // ------ Plain wiring ----------------------------
-ready_valid_i #(type_t) plain_type(clk, reset_synced);
+ready_valid_i #(type_t) plain_type(clk, reset_synced), plain_cast_type(clk, reset_synced);
 ready_valid_i #(logic)  plain_required(clk, reset_synced); // is_required
 ndata_i #(data8_t, DATABEAT_SIZE) plain_in(clk, reset_synced);
 ndata_i #(data8_t, DATABEAT_SIZE) plain_stripped(clk, reset_synced), plain_out(clk, reset_synced);
@@ -194,6 +212,7 @@ NDataSkidBuffer #(data8_t, DATABEAT_SIZE) inst_plain_stripped_skid_buffer  (
     .out(plain_out)
 );
 
+typed_ndata_i #(DATABEAT_SIZE) plain_physical(clk, reset_synced);
 NDataToTypedNData #(DATABEAT_SIZE) inst_plain_type (
     .clk(clk),
     .rst_n(reset_synced),
@@ -201,6 +220,20 @@ NDataToTypedNData #(DATABEAT_SIZE) inst_plain_type (
     .in_type(plain_type),
     .in(plain_out),
 
+    .out(plain_physical)
+);
+
+// Narrows 64 bit values to INT32_T like the dictionary path, so both paths emit the same type into
+// the TypedNormalizeUntil, which counts the values of a chunk in one type.
+TypedNDataCast #(
+    .DATABEAT_SIZE(DATABEAT_SIZE)
+) inst_plain_cast (
+    .clk(clk),
+    .rst_n(reset_synced),
+
+    .out_type(plain_cast_type),
+
+    .in(plain_physical),
     .out(outs[OUT_PLAIN])
 );
 
@@ -232,8 +265,9 @@ TypedNormalizeUntil #(
     .out(normalized)
 );
 
-// Casts the physical type to the logical type. It is placed after TypedNormalizeUntil, which counts
-// values in the physical type and provides the dense input the cast requires.
+// Casts 32 bit values to the logical type (INT16_T or BYTE_T), also those the paths narrowed from
+// 64 bit. Values already in the logical type pass through. It is placed after TypedNormalizeUntil,
+// which provides the dense input the cast requires.
 ready_valid_i #(type_t) logical_type(clk, reset_synced);
 TypedNDataCast #(
     .DATABEAT_SIZE(DATABEAT_SIZE)
@@ -260,6 +294,7 @@ typedef enum logic [1:0] {
 state_t state;
 
 type_t typ;
+type_t path_typ; // Type the dictionary and plain paths emit
 logic is_required;
 logic last_page;
 
@@ -295,13 +330,20 @@ always_ff @(posedge clk) begin
         dict_type.data  <= 'X;
         dict_type.valid <= 1'b0;
 
+        dict_cast_type.data  <= 'X;
+        dict_cast_type.valid <= 1'b0;
+
         plain_type.data  <= 'X;
         plain_type.valid <= 1'b0;
+
+        plain_cast_type.data  <= 'X;
+        plain_cast_type.valid <= 1'b0;
 
         plain_required.data  <= 'X;
         plain_required.valid <= 1'b0;
 
         typ         <= BYTE_T;
+        path_typ    <= type_t'('X);
         is_required <= 'X;
         dict_seen   <= 'X;
         last_page   <= 'X;
@@ -323,6 +365,10 @@ always_ff @(posedge clk) begin
                     logical_type.valid <= 1'b1;
 
                     typ         <= chunk_confs[0].data.typ;
+                    // 64 bit values cast to a narrower integer type are narrowed to INT32_T on the paths
+                    path_typ    <= chunk_confs[0].data.typ == INT64_T &&
+                                   chunk_confs[0].data.logical_typ inside {INT32_T, INT16_T, BYTE_T} ?
+                                   INT32_T : chunk_confs[0].data.typ;
                     is_required <= chunk_confs[0].data.is_required;
                     dict_seen   <= 1'b0;
                     state       <= ST_CONFIGURED;
@@ -364,6 +410,9 @@ always_ff @(posedge clk) begin
                             dict_type.data  <= typ;
                             dict_type.valid <= 1'b1;
 
+                            dict_cast_type.data  <= path_typ;
+                            dict_cast_type.valid <= 1'b1;
+
                             dict_seen <= 1'b1;
                         end
                         PAGE_TYPE_PLAIN: begin
@@ -371,6 +420,9 @@ always_ff @(posedge clk) begin
 
                             plain_type.data  <= typ;
                             plain_type.valid <= 1'b1;
+
+                            plain_cast_type.data  <= path_typ;
+                            plain_cast_type.valid <= 1'b1;
 
                             plain_required.data  <= is_required;
                             plain_required.valid <= 1'b1;
@@ -403,8 +455,16 @@ always_ff @(posedge clk) begin
                     dict_type.valid <= 1'b0;
                 end
 
+                if (dict_cast_type.ready) begin
+                    dict_cast_type.valid <= 1'b0;
+                end
+
                 if (plain_type.ready) begin
                     plain_type.valid <= 1'b0;
+                end
+
+                if (plain_cast_type.ready) begin
+                    plain_cast_type.valid <= 1'b0;
                 end
 
                 if (plain_required.ready) begin
@@ -431,7 +491,7 @@ always_ff @(posedge clk) begin
                 //   a new column chunk configuration next.
                 // - CONFIGURED if this was not the last page and this column
                 //   chunk has more pages to be fully decoded.
-                if (!decompressor_conf.valid && !hybrid_conf.valid && !dict_type.valid && !plain_type.valid && !plain_required.valid && !in_select.valid && !out_select.valid) begin
+                if (!decompressor_conf.valid && !hybrid_conf.valid && !dict_type.valid && !dict_cast_type.valid && !plain_type.valid && !plain_cast_type.valid && !plain_required.valid && !in_select.valid && !out_select.valid) begin
                     if (last_page) begin
                         state <= ST_IDLE;
                     end else begin

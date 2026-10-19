@@ -26,13 +26,6 @@ inline uint64_t compression_to_hardware(metadata::Compression compression) {
     }
 }
 
-// Casts the TypedNDataCast in the ColumnChunkDecoder supports
-inline bool is_supported_cast(libstf::type_t typ, libstf::type_t logical_typ) {
-    return logical_typ == typ ||
-           (typ == libstf::type_t::INT32_T &&
-            (logical_typ == libstf::type_t::INT16_T || logical_typ == libstf::type_t::BYTE_T));
-}
-
 // column_chunk_conf_t packs (MSB -> LSB) as:
 //   logical type_t [3 bits] | is_required [1 bit] | compression_t [1 bit] | num_values [32 bits] |
 //   type_t [3 bits]
@@ -51,6 +44,13 @@ ColumnChunkDecoderConfig::ColumnChunkDecoderConfig(std::shared_ptr<coyote::cThre
     : Config(cthread, addr_offset, num_regs), num_decoders_(read_register(1).value()),
       maximum_num_enqueued_configs_(read_register(2).value()) {}
 
+// Casts the TypedNDataCasts in the ColumnChunkDecoder support
+bool ColumnChunkDecoderConfig::supports_cast(libstf::type_t typ, libstf::type_t logical_typ) {
+    const bool below_32 = logical_typ == libstf::type_t::INT16_T || logical_typ == libstf::type_t::BYTE_T;
+    return logical_typ == typ || (typ == libstf::type_t::INT32_T && below_32) ||
+           (typ == libstf::type_t::INT64_T && (logical_typ == libstf::type_t::INT32_T || below_32));
+}
+
 void ColumnChunkDecoderConfig::enqueue_column_chunk(libstf::stream_t      decoder,
                                                     metadata::Compression compression,
                                                     uint64_t num_values, libstf::type_t typ,
@@ -60,7 +60,7 @@ void ColumnChunkDecoderConfig::enqueue_column_chunk(libstf::stream_t      decode
                                  std::to_string(decoder) + " (zero-based numbering), out of " +
                                  std::to_string(num_decoders_) + " decoders");
     }
-    if (!is_supported_cast(typ, logical_typ)) {
+    if (!supports_cast(typ, logical_typ)) {
         std::ostringstream msg;
         msg << "ColumnChunkDecoder cannot cast " << typ << " to " << logical_typ;
         throw std::runtime_error(msg.str());

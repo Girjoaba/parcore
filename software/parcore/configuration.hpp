@@ -54,6 +54,11 @@ class ColumnChunkDecoderConfig : public libstf::Config {
                               uint64_t num_values, libstf::type_t typ, bool is_required,
                               libstf::type_t logical_typ);
 
+    /**
+     * Whether the decoders can cast values of typ to logical_typ.
+     */
+    static bool supports_cast(libstf::type_t typ, libstf::type_t logical_typ);
+
     const libstf::stream_t num_decoders() const;
     const size_t           maximum_num_enqueued_configs() const;
 

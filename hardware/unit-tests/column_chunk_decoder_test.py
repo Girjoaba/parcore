@@ -360,3 +360,61 @@ class ColumnChunkDecoderTestCase(ConfiguredTestCase):
                 _PLAIN_OUTPUT,
             ],
         )
+
+    def test_logical_type_int32_from_int64(self):
+        # INT64 chunks cast to INT32: a dictionary chunk with hybrid and plain pages and a REQUIRED
+        # plain chunk with a partial last beat, followed by an INT64 chunk without a cast. The values
+        # cover the whole INT32 range, including both ends and negative values.
+        int32_dict  = [-2**31, -1, 0, 1, 2**31 - 1, -123456789, 987654321, -7, 65536, -65537]
+        int32_plain = list(range(-2**31, 2**31, 2**31 // 50))
+
+        dict_chunk = make_tricky(
+            'rle_data_rg0_col0', len(_RLE_OUTPUT), int32_plain, 2, dict_values=int32_dict,
+        )
+        dict_chunk.logical_type = fpga_stream.StreamType.SIGNED_INT_32
+
+        plain_values = [-2**31 + 3 * i for i in range(37)]
+        plain_chunk = make_plain_data(plain_values, is_required=True)
+        plain_chunk.logical_type = fpga_stream.StreamType.SIGNED_INT_32
+
+        self.run_chunks(
+            [dict_chunk, plain_chunk, make_plain_data(_PLAIN_OUTPUT)],
+            [
+                _rle_output(int32_dict) * 2 + int32_plain,
+                plain_values,
+                _PLAIN_OUTPUT,
+            ],
+        )
+
+    def test_logical_types_from_int64(self):
+        # INT64 chunks cast to INT16 and UINT8, which the decoder does in two steps (64 -> 32 bit on
+        # the dictionary and plain paths, then to the logical type at the output): an OPTIONAL
+        # dictionary chunk with hybrid and plain pages, a REQUIRED one, and a REQUIRED plain chunk
+        # with a partial last beat, followed by an INT64 chunk without a cast. The INT16 values cover
+        # both ends of the range.
+        int16_dict  = [-2**15, -1, 0, 1, 2**15 - 1, -12345, 23456, -7, 256, -257]
+        int16_plain = list(range(-2**15, 2**15, 2**15 // 40))
+
+        int16_chunk = make_tricky(
+            'rle_data_rg0_col0', len(_RLE_OUTPUT), int16_plain, 2, dict_values=int16_dict,
+        )
+        int16_chunk.logical_type = fpga_stream.StreamType.SIGNED_INT_16
+
+        uint8_chunk = make_tricky(
+            'rle_data_rg0_col0', len(_RLE_OUTPUT), _PLAIN_OUTPUT, 1, is_required=True,
+        )
+        uint8_chunk.logical_type = fpga_stream.StreamType.UNSIGNED_INT_8
+
+        plain_values = [-2**15 + 5 * i for i in range(45)]
+        plain_chunk = make_plain_data(plain_values, is_required=True)
+        plain_chunk.logical_type = fpga_stream.StreamType.SIGNED_INT_16
+
+        self.run_chunks(
+            [int16_chunk, uint8_chunk, plain_chunk, make_plain_data(_PLAIN_OUTPUT)],
+            [
+                _rle_output(int16_dict) * 2 + int16_plain,
+                _RLE_OUTPUT + _PLAIN_OUTPUT,
+                plain_values,
+                _PLAIN_OUTPUT,
+            ],
+        )
