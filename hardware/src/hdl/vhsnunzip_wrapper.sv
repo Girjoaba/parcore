@@ -1,5 +1,7 @@
 `timescale 1ns / 1ps
 
+`include "libstf_macros.svh"
+
 import lynxTypes::*;
 import libstf::*;
 
@@ -72,7 +74,13 @@ module VHSNUnzipWrapperInternal #(
     localparam DECOMP_OUT_CNT_BITS = $clog2(DECOMP_DATA_BYTES) + 1;
 
     localparam CNT_BITS = $clog2(NUM_BYTES);
-    localparam INDEX_BITS = $clog2(NUM_BYTES / DECOMP_DATA_BYTES);
+    // Decompressor lines per beat. With one line per beat the index is always 0, but still needs a
+    // bit, because a zero width index is a two bit [-1:0] vector.
+    localparam NUM_LINES = NUM_BYTES / DECOMP_DATA_BYTES;
+    localparam INDEX_BITS = NUM_LINES > 1 ? $clog2(NUM_LINES) : 1;
+    localparam logic [INDEX_BITS-1:0] LAST_INDEX = NUM_LINES - 1;
+
+    `ASSERT_ELAB(NUM_BYTES % DECOMP_DATA_BYTES == 0)
 
     // Decompressor input ports
     logic co_valid;   
@@ -105,13 +113,12 @@ module VHSNUnzipWrapperInternal #(
     logic [INDEX_BITS-1:0] out_index;
 
     // Ready to receive new input when we are done with the chunk or currently streaming the last part of it.
-    // assign in.ready = rst_n && (in_done || (in_index == {(INDEX_BITS){1'b1}} && co_ready));
     always_comb begin
         in.ready = 1'b0;
         if (rst_n) begin
             if (in_done) begin
                 in.ready = 1'b1;
-            end else if (in_index == {(INDEX_BITS){1'b1}} && co_ready) begin
+            end else if (in_index == LAST_INDEX && co_ready) begin
                 in.ready = 1'b1;
             end
         end
@@ -144,8 +151,8 @@ module VHSNUnzipWrapperInternal #(
                     in_index <= in_index + 1;
                 end
             end
-    	end else begin
-  	        in_index <= 0;
+        end else begin
+            in_index <= 0;
             in_done <= 1'b1;
         end
     end
@@ -153,7 +160,7 @@ module VHSNUnzipWrapperInternal #(
     // in_cnt
     always_comb begin
         in_cnt = 0;
-        for (int i = 0, done = 0; i < AXI_DATA_BITS/8; i++) begin
+        for (int i = 0, done = 0; i < NUM_BYTES; i++) begin
             if (!done && !in_keep[i]) begin
                 in_cnt = i;
                 done = 1;
@@ -171,7 +178,7 @@ module VHSNUnzipWrapperInternal #(
             // Section fed to the decompressor is only partially valid
             co_cnt = in_cnt[DECOMP_IN_CNT_BITS-1:0];
             co_last = 1'b1;
-        end else if (in_last && in_index == {INDEX_BITS{1'b1}}) begin
+        end else if (in_last && in_index == LAST_INDEX) begin
             // Input is last chunk and index is at the end
             co_last = 1'b1;
         end
@@ -197,8 +204,8 @@ module VHSNUnzipWrapperInternal #(
     always_ff @(posedge clk) begin
         if (rst_n) begin
             if (de_ready && de_valid) begin
-                if (de_last) begin
-                    // Internal reset
+                if (de_last || out_index == LAST_INDEX) begin
+                    // Internal reset or the beat is full
                     out_index <= 0;
                 end else begin
                     out_index <= out_index + 1;
@@ -211,7 +218,7 @@ module VHSNUnzipWrapperInternal #(
 
     // out.data, out.keep and out.last
     always_ff @(posedge clk) begin
-        logic [AXI_DATA_BITS/8-1:0] tmp_keep;
+        logic [NUM_BYTES-1:0] tmp_keep;
         if (rst_n) begin
             if (de_ready && de_valid) begin
                 // Read decompressed data
@@ -243,7 +250,7 @@ module VHSNUnzipWrapperInternal #(
     // out.valid
     always_ff @(posedge clk) begin
         if (rst_n) begin
-            if (de_ready && de_valid && (out_index == {INDEX_BITS{1'b1}} || de_last)) begin
+            if (de_ready && de_valid && (out_index == LAST_INDEX || de_last)) begin
                 // We are ready to transmit the next chunk after the final (for the chunk or in total) bit was read.
                 out.valid <= 1'b1;
             end else if (out.valid && out.ready) begin
