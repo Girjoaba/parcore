@@ -182,7 +182,7 @@ bpe_count_t varint_no_encoding_bytes;
 assign varint_no_encoding_bytes = varint_no_encoding  << 3;
 
 // ------- RLE decoding
-tagged_i #(data_t, $bits(rle_count_t)) rle_in(clk, reset_synced);
+tagged_i #(data_t, rle_count_t) rle_in(clk, reset_synced);
 ndata_i #(data_t, NUM_ELEMENTS) rle_out(clk, reset_synced);
 
 ExpandRLE #(
@@ -222,7 +222,7 @@ assign bpe_in_tag.bit_width = bit_width;
 assign bpe_in_tag.mask = bit_width_bpe_mask;
 assign bpe_in_tag.count = bpe_count;
 
-tagged_i #(logic [$bits(data_t) * NUM_ELEMENTS - 1:0], $bits(bpe_config_t)) bpe_in(clk, reset_synced);
+tagged_i #(logic [$bits(data_t) * NUM_ELEMENTS - 1:0], bpe_config_t) bpe_in(clk, reset_synced);
 ndata_i  #(data_t, NUM_ELEMENTS) bpe_out(clk, reset_synced);
 
 ExpandBPE #(

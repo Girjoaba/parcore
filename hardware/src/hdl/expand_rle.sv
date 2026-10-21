@@ -13,13 +13,13 @@ module ExpandRLE #(
     input logic clk,
     input logic rst_n,
 
-    tagged_i.s in,  // #(data_t, $bits(rle_count_t))
+    tagged_i.s in,  // #(data_t, rle_count_t)
     ndata_i.m out   // #(data_t, NUM_ELEMENTS)
 );
 
-tagged_i #(data_t, $bits(rle_count_t)) in_inner(clk, rst_n);
+tagged_i #(data_t, rle_count_t) in_inner(clk, rst_n);
 
-TaggedSkidBuffer #(data_t, $bits(rle_count_t)) inst_in_skid_buffer (
+TaggedSkidBuffer #(data_t, rle_count_t) inst_in_skid_buffer (
     .clk(clk),
     .rst_n(rst_n),
 
@@ -44,7 +44,7 @@ module ExpandRLEInternal #(
     input logic clk,
     input logic rst_n,
 
-    tagged_i.s in,  // #(data_t, $bits(rle_count_t))
+    tagged_i.s in,  // #(data_t, rle_count_t)
     ndata_i.m out   // #(data_t, NUM_ELEMENTS)
 );
 
