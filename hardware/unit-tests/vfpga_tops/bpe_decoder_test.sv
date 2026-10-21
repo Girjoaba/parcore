@@ -36,7 +36,7 @@ assign host_in.tvalid = axis_host_recv[0].tvalid;
 
 localparam int BITS = $bits(data32_t) * 16;
 
-tagged_i #(logic [BITS - 1:0], $bits(bpe_config_t)) in(clk, rst_n);
+tagged_i #(logic [BITS - 1:0], bpe_config_t) in(clk, rst_n);
 assign host_in.tready = in.ready;
 assign in.valid = host_in.tvalid;
 assign in.data  = host_in.tdata;

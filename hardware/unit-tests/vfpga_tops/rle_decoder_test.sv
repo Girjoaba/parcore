@@ -35,7 +35,7 @@ assign host_in.tkeep = axis_host_recv[0].tkeep;
 assign host_in.tlast = axis_host_recv[0].tlast;
 assign host_in.tvalid = axis_host_recv[0].tvalid;
 
-tagged_i #(data32_t, $bits(rle_count_t)) in(clk, rst_n);
+tagged_i #(data32_t, rle_count_t) in(clk, rst_n);
 assign host_in.tready = in.ready;
 assign in.valid = host_in.tvalid;
 assign in.data  = host_in.tdata[$bits(data32_t) - 1:0];

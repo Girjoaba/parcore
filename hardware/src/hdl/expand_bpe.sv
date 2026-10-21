@@ -40,7 +40,7 @@ module ExpandBPE #(
     input logic clk,
     input logic rst_n,
 
-    tagged_i.s in, // #(logic [$bits(data_t) * NUM_ELEMENTS - 1:0], $bits(bpe_config_t))
+    tagged_i.s in, // #(logic [$bits(data_t) * NUM_ELEMENTS - 1:0], bpe_config_t)
     ndata_i.m out  // #(data_t, NUM_ELEMENTS)
 );
 
@@ -55,7 +55,7 @@ localparam int IDX_BOUNDARIES[N_STAGES+1] = '{
 
 typedef logic [$bits(data_t) * NUM_ELEMENTS - 1:0] input_t;
 
-tagged_i #(input_t, $bits(bpe_config_t)) in_inner(clk, rst_n);
+tagged_i #(input_t, bpe_config_t) in_inner(clk, rst_n);
 bpe_stage_i #(input_t, bpe_config_t, data_t, NUM_ELEMENTS) middle[N_STAGES:0]();
 
 // some stages of buffering are required for full throughput in RunDecoder

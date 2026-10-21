@@ -54,7 +54,12 @@ RunDecoderConfig inst_run_decoder_config (
 );
 
 ready_valid_i #(run_decoder_config_t) conf_dup[2](clk, rst_n);
-`READY_DUPLICATE(2, conf, conf_dup)
+ReadyValidDuplicator #(2) inst_conf_duplicate (
+    .clk(clk),
+    .rst_n(rst_n),
+    .in(conf),
+    .out(conf_dup)
+);
 
 ready_valid_i #(data32_t) page_num_values(clk, rst_n);
 assign page_num_values.data  = conf_dup[1].data.num_values;
