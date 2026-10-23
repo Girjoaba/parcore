@@ -165,7 +165,13 @@ assign current_varint_offset = (state == ST_DECODE_BPE && varint_offset <= offse
 data8_t[3:0] expected_varint_data;
 assign expected_varint_data = data[current_varint_offset +: 4];
 
+// Verilator does not support ==? with a signal on the right side. 
+// It is two-state, both sides read the same buffer, so == is enough there.
+`ifdef VERILATOR
 assert property (@(posedge clk) disable iff (!rst_n) !varint_in.valid || (expected_varint_data == varint_in.data))
+`else
+assert property (@(posedge clk) disable iff (!rst_n) !varint_in.valid || (expected_varint_data ==? varint_in.data))
+`endif
 else $fatal(1, "Varint input data does not match the data at the current offset. In state %d, at varint_offset 0x%x, offset 0x%x, expected 0b%b (%x), got 0b%b (%x)", state, current_varint_offset, offset, expected_varint_data, expected_varint_data, varint_in.data, varint_in.data);
 
 // Combinatorial shift values from the varint value used to compute rle_count
