@@ -294,7 +294,10 @@ always_comb begin
                 n_state = PAYLOAD_BYPASS;
             end else if (!payload.valid || payload.ready) begin
                 n_payload_data  = buffer_data[NUM_BYTES - 1:0];
-                n_payload_last  = (remaining_comp_size <= data32_t'(remaining_bytes));
+                // At most one beat goes out per cycle, so the page can only end in this beat if
+                // its remaining payload fits in it, even if the buffer holds all of it.
+                n_payload_last  = remaining_comp_size <= data32_t'(remaining_bytes) &&
+                                  remaining_comp_size <= NUM_BYTES;
                 n_payload_valid = 1'b1;
 
                 if (remaining_bytes > NUM_BYTES && remaining_comp_size > NUM_BYTES) begin
